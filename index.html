@@ -1,0 +1,2262 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>고세종T 테스트 성적 관리 시스템</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📊</text></svg>">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          navy: {
+            50:  '#eef2f8',
+            100: '#d7e0ee',
+            200: '#b3c3dc',
+            300: '#8aa2c7',
+            400: '#5f7ea8',
+            500: '#3f5f88',
+            600: '#2c4a6e',
+            700: '#213a58',
+            800: '#182a41',
+            900: '#101d2e',
+            950: '#0a1320'
+          }
+        }
+      }
+    }
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js"></script>
+
+<style>
+  [v-cloak] { display: none; }
+
+  body { font-family: "Pretendard", "Malgun Gothic", -apple-system, BlinkMacSystemFont, sans-serif; }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
+
+  input.no-spinner::-webkit-inner-spin-button,
+  input.no-spinner::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; opacity: 0; }
+  input.no-spinner { appearance: textfield; -moz-appearance: textfield; }
+
+  .tbl-input {
+    width: 100%;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 4px 6px;
+  }
+  .tbl-input:hover { border-color: #cbd5e1; }
+  .tbl-input:focus {
+    outline: none;
+    border-color: #2c4a6e;
+    background: white;
+    box-shadow: 0 0 0 2px rgba(44,74,110,0.15);
+  }
+
+  /* ---------- 성적표 캡처(html2canvas) 수직 정렬 보정 ---------- */
+  /* html2canvas는 line-height: normal(기본값)일 때 브라우저와 다르게 글자 기준선을
+     계산해 텍스트가 아래로 밀리는 현상이 있다. 캡처 대상 전체에 명시적 숫자 line-height를
+     강제해 오프셋이 누적되지 않도록 한다. 폰트도 실제 렌더링에 쓰이는 폰트로 고정한다. */
+  #print-area,
+  #print-area * {
+    line-height: 1.4;
+    font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  }
+  #print-area td,
+  #print-area th {
+    vertical-align: middle;
+  }
+
+  /* ---------- 인쇄(A4) 전용 스타일 ---------- */
+  @media print {
+    @page { size: A4; margin: 14mm; }
+    body * { visibility: hidden; }
+    #print-area, #print-area * { visibility: visible; }
+    #print-area {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    .no-print { display: none !important; }
+  }
+</style>
+</head>
+
+<body class="bg-slate-100 text-slate-800">
+
+<div id="app" v-cloak>
+
+  <!-- ================= 토스트 알림 ================= -->
+  <div v-if="toast.show" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 no-print transition-opacity">
+    <div class="px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 max-w-sm"
+      :class="toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'">
+      <span>{{ toast.type === 'success' ? '✅' : '⚠️' }}</span>
+      <span>{{ toast.message }}</span>
+    </div>
+  </div>
+
+  <!-- ================= 수정 이력(Audit Log) 모달 ================= -->
+  <div v-if="auditModalOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 no-print" @click.self="closeAuditLog">
+    <div class="w-full max-w-2xl max-h-[80vh] bg-white rounded-xl shadow-xl flex flex-col">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+        <h2 class="text-base font-bold text-navy-900">최근 수정 기록</h2>
+        <button @click="closeAuditLog" class="text-slate-400 hover:text-slate-600 text-sm">닫기 ✕</button>
+      </div>
+      <div class="overflow-y-auto px-5 py-4 space-y-2">
+        <div v-if="auditLoading" class="text-center text-slate-400 text-sm py-10">불러오는 중...</div>
+        <template v-else>
+          <div v-if="auditLogs.length === 0" class="text-center text-slate-400 text-sm py-10">수정 기록이 없습니다.</div>
+          <div v-for="log in auditLogs" :key="log.id" class="border border-slate-100 rounded-lg px-3 py-2.5 text-sm">
+            <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+              <span>{{ formatAuditTime(log.timestamp) }}</span>
+              <span>{{ log.modifier }}</span>
+            </div>
+            <div class="text-slate-700 mb-1.5">
+              <span class="font-semibold">{{ log.studentName }}</span>
+              <span class="text-slate-400"> · {{ log.round }}회차 · {{ (log.changes || []).length }}건 변경</span>
+            </div>
+            <ul class="space-y-0.5">
+              <li v-for="(c, idx) in log.changes" :key="idx" class="text-slate-500">
+                <span class="text-slate-600">{{ c.targetField }}</span> :
+                <span class="line-through text-slate-400">{{ displayAuditValue(c.oldValue) }}</span>
+                → <span class="font-medium text-navy-800">{{ displayAuditValue(c.newValue) }}</span>
+              </li>
+            </ul>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 인증 상태 확인 중 ================= -->
+  <div v-if="authChecking" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-100 no-print">
+    <div class="flex items-center gap-2 text-navy-700 text-sm font-medium">
+      <svg class="animate-spin h-5 w-5 text-navy-700" viewBox="0 0 24 24" fill="none">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+      </svg>
+      인증 확인 중...
+    </div>
+  </div>
+
+  <!-- ================= 관리자 로그인 화면 ================= -->
+  <div v-else-if="!user" class="fixed inset-0 z-50 flex items-center justify-center bg-navy-950 p-4 no-print">
+    <div class="w-full max-w-sm bg-white rounded-2xl shadow-xl p-8">
+      <div class="text-center mb-6">
+        <div class="w-12 h-12 mx-auto rounded-xl bg-navy-700 text-white flex items-center justify-center font-bold text-xl mb-3">📝</div>
+        <h1 class="text-lg font-bold text-navy-900">관리자 로그인</h1>
+        <p class="text-xs text-slate-500 mt-1">고세종T 테스트 성적 관리 시스템</p>
+      </div>
+      <form @submit.prevent="login" class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-500 mb-1">이메일</label>
+          <input type="email" v-model="loginEmail" required autocomplete="username" placeholder="admin@example.com"
+            class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-navy-300">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 mb-1">비밀번호</label>
+          <input type="password" v-model="loginPassword" required autocomplete="current-password" placeholder="••••••••"
+            class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-navy-300">
+        </div>
+        <div v-if="loginError" class="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+          {{ loginError }}
+        </div>
+        <button type="submit" :disabled="loggingIn"
+          class="w-full py-2.5 text-sm font-semibold rounded-lg bg-navy-700 text-white hover:bg-navy-800 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+          <svg v-if="loggingIn" class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+          </svg>
+          {{ loggingIn ? '로그인 중...' : '로그인' }}
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= 로그인 완료 후 메인 화면 ================= -->
+  <template v-else>
+
+  <!-- ================= 클라우드 데이터 로딩 오버레이 ================= -->
+  <div v-if="dataLoading" class="fixed inset-0 z-40 flex items-center justify-center bg-white/70 backdrop-blur-sm no-print">
+    <div class="flex items-center gap-2 text-navy-700 text-sm font-semibold bg-white shadow-lg rounded-lg px-4 py-3 border border-slate-200">
+      <svg class="animate-spin h-5 w-5 text-navy-700" viewBox="0 0 24 24" fill="none">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+      </svg>
+      ☁️ 클라우드에서 데이터를 불러오는 중...
+    </div>
+  </div>
+
+  <!-- ================= 상단 헤더 & 네비게이션 ================= -->
+  <header class="bg-navy-900 text-white shadow-lg no-print sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-navy-600 flex items-center justify-center font-bold text-lg">📝</div>
+          <div>
+            <h1 class="text-base sm:text-lg font-bold leading-tight">고세종T 테스트 성적 관리</h1>
+            <p class="text-[11px] text-navy-200 leading-tight hidden sm:block">Test Grade Management System</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span v-if="currentClass && currentClass.archived"
+            class="bg-amber-900/40 border border-amber-500/50 text-amber-200 rounded-lg px-2.5 py-1.5 text-xs font-medium"
+            title="종료된 반은 이 목록에 표시되지 않습니다. [반 정보 관리] 탭에서 조회 중입니다.">
+            🔒 {{ currentClass.name }} (종료됨)
+          </span>
+          <select v-else v-model.number="currentClassId" class="bg-navy-800 border border-navy-600 rounded-lg px-2.5 py-1.5 text-xs text-white">
+            <option v-for="c in activeClasses" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+          <div class="text-xs text-navy-300 hidden lg:flex items-center gap-1 ml-1">
+            <svg v-if="dataSaving" class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            <span>{{ dataSaving ? '클라우드 저장 중...' : '☁️ 클라우드 저장됨' }}</span>
+          </div>
+          <div class="w-px h-5 bg-navy-700 mx-1 hidden sm:block"></div>
+          <span class="text-xs text-navy-300 hidden sm:block truncate max-w-[160px]" :title="user && user.email">{{ user && user.email }}</span>
+          <button @click="logout" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-navy-800 border border-navy-600 hover:bg-navy-700 text-white whitespace-nowrap">
+            로그아웃
+          </button>
+        </div>
+      </div>
+
+      <nav class="flex gap-1 overflow-x-auto pb-2 -mb-px">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          @click="activeTab = tab.key"
+          class="whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg transition-colors"
+          :class="activeTab === tab.key
+            ? 'bg-slate-100 text-navy-800'
+            : 'text-navy-200 hover:bg-navy-800 hover:text-white'"
+        >
+          {{ tab.label }}
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ================= 메인 컨텐츠 ================= -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+
+    <!-- ========================================================= -->
+    <!-- 탭 0. 반 정보 관리                                          -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'class'" class="space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-lg font-bold text-navy-900 mb-1">반 정보 관리</h2>
+        <p class="text-sm text-slate-500 mb-4">반(수업)을 등록하고 관리합니다. 반마다 학생 명단과 시험 회차가 서로 독립적으로 관리됩니다.</p>
+        <div class="flex gap-2">
+          <input type="text" v-model="newClassName" @keyup.enter="addClass" placeholder="새 반 이름 (예: 선덕고 화요일반)"
+            class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <button @click="addClass" class="px-4 py-2 text-sm font-medium rounded-lg bg-navy-700 text-white hover:bg-navy-800">+ 반 추가</button>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-navy-800 text-white text-left">
+              <th class="px-3 py-2.5 font-semibold w-16 text-center">선택</th>
+              <th class="px-3 py-2.5 font-semibold">반 이름</th>
+              <th class="px-3 py-2.5 font-semibold w-24 text-center">학생 수</th>
+              <th class="px-3 py-2.5 font-semibold w-24 text-center">회차 수</th>
+              <th class="px-3 py-2.5 font-semibold w-28 text-center">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in activeClasses" :key="c.id" class="border-b border-slate-100 hover:bg-slate-50"
+              :class="c.id === currentClassId ? 'bg-navy-50' : ''">
+              <td class="px-3 py-2 text-center">
+                <input type="radio" :checked="c.id === currentClassId" @change="currentClassId = c.id" class="accent-navy-700 w-4 h-4">
+              </td>
+              <td class="px-3 py-1"><input type="text" v-model="c.name" @input="touch" class="tbl-input font-medium"></td>
+              <td class="px-3 py-2 text-center text-slate-500">{{ studentsInClass(c.id).length }}명</td>
+              <td class="px-3 py-2 text-center text-slate-500">{{ roundsInClass(c.id).length }}회</td>
+              <td class="px-3 py-2 text-center">
+                <span class="inline-flex items-center gap-2">
+                  <button @click="archiveClass(c)" class="text-slate-400 hover:text-navy-700 text-xs font-medium">종료</button>
+                  <button @click="deleteClass(c)" class="text-red-400 hover:text-red-600 text-xs font-medium">삭제</button>
+                </span>
+              </td>
+            </tr>
+            <tr v-if="activeClasses.length === 0">
+              <td colspan="5" class="text-center text-slate-400 py-8 text-sm">등록된 반이 없습니다. 위에서 반을 추가하세요.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="archivedClasses.length > 0" class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <details>
+          <summary class="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100">
+            🔒 종료된 반 ({{ archivedClasses.length }})
+          </summary>
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-slate-600 text-white text-left">
+                <th class="px-3 py-2.5 font-semibold">반 이름</th>
+                <th class="px-3 py-2.5 font-semibold w-24 text-center">학생 수</th>
+                <th class="px-3 py-2.5 font-semibold w-24 text-center">회차 수</th>
+                <th class="px-3 py-2.5 font-semibold w-40 text-center">관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in archivedClasses" :key="c.id" class="border-b border-slate-100 hover:bg-slate-50 text-slate-500"
+                :class="c.id === currentClassId ? 'bg-navy-50' : ''">
+                <td class="px-3 py-2">{{ c.name }}</td>
+                <td class="px-3 py-2 text-center">{{ studentsInClass(c.id).length }}명</td>
+                <td class="px-3 py-2 text-center">{{ roundsInClass(c.id).length }}회</td>
+                <td class="px-3 py-2 text-center">
+                  <span class="inline-flex items-center gap-2">
+                    <button @click="currentClassId = c.id" class="text-navy-600 hover:text-navy-800 text-xs font-medium">조회</button>
+                    <button @click="restoreClass(c)" class="text-emerald-600 hover:text-emerald-800 text-xs font-medium">복원</button>
+                    <button @click="deleteClass(c)" class="text-red-400 hover:text-red-600 text-xs font-medium">삭제</button>
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+      </div>
+
+      <div v-if="currentClass" class="text-sm rounded-lg px-4 py-2.5 border"
+        :class="currentClass.archived ? 'text-amber-700 bg-amber-50 border-amber-100' : 'text-navy-700 bg-navy-50 border-navy-100'">
+        현재 선택된 반 : <span class="font-semibold">{{ currentClass.name }}</span>
+        <span v-if="currentClass.archived" class="font-medium">(종료된 반 — 조회 전용, 헤더 목록에는 표시되지 않습니다)</span>
+        — 다른 탭의 데이터는 이 반을 기준으로 표시됩니다.
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 0-1. 반별 대시보드                                       -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'dashboard'" class="space-y-4">
+      <div v-if="!currentClass" class="bg-white rounded-xl border border-slate-200 shadow-sm p-10 text-center text-slate-400 text-sm">
+        [반 정보 관리] 탭에서 먼저 반을 선택하세요.
+      </div>
+      <template v-else>
+        <div class="text-sm rounded-lg px-4 py-2.5 border text-navy-700 bg-navy-50 border-navy-100">
+          <span class="font-semibold">{{ currentClass.name }}</span> 반의 전체 현황입니다.
+        </div>
+
+        <!-- 회차별 응시자수 -->
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <h2 class="text-lg font-bold text-navy-900 mb-1">회차별 응시자수</h2>
+          <p class="text-sm text-slate-500 mb-4">회차별 응시 인원입니다. 막대 위 숫자는 참고용으로 표기한 해당 회차 점수 평균입니다.</p>
+          <div v-if="attendanceByRound.length === 0" class="text-center text-slate-400 py-10 text-sm">등록된 회차가 없습니다.</div>
+          <div v-else class="flex items-end gap-3 sm:gap-5 px-2 overflow-x-auto">
+            <div v-for="r in attendanceByRound" :key="r.round" class="flex flex-col items-center min-w-[56px]">
+              <div class="text-[11px] text-slate-400 mb-0.5 whitespace-nowrap">
+                <span v-if="r.count > 0">평균 {{ fmt(r.average) }}점</span>
+              </div>
+              <div class="text-xs font-semibold text-navy-800 mb-1">{{ r.count }}명</div>
+              <div class="w-full h-32 flex items-end justify-center bg-slate-50 rounded-t-md">
+                <div class="w-8 sm:w-10 bg-navy-600 rounded-t-md transition-all" :style="{ height: r.heightPercent + '%' }"></div>
+              </div>
+              <div class="text-xs font-medium text-slate-600 mt-2 pt-2 border-t border-slate-200 w-full text-center whitespace-nowrap">{{ r.round }}회차</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 분류별 취약 Top10 -->
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <h2 class="text-lg font-bold text-navy-900 mb-1">분류별 오답률 Top 10</h2>
+          <p class="text-sm text-slate-500 mb-4">응시생이 있는 전체 회차를 합산한 분류(단원)별 정답률입니다. 정답률 낮은 순으로 나열했으며, 빈칸으로 남긴 문항도 오답으로 계산합니다. 주관식 부분점수를 반영한 득점 기준 비율이라 순수 정오 비율과는 다를 수 있습니다.</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="bg-navy-800 text-white text-left">
+                  <th class="px-3 py-2.5 font-semibold w-14 text-center">순위</th>
+                  <th class="px-3 py-2.5 font-semibold">분류</th>
+                  <th class="px-3 py-2.5 font-semibold w-48 text-center">정답률</th>
+                  <th class="px-3 py-2.5 font-semibold w-24 text-center">응시 수</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(c, idx) in categoryWeaknessTop10" :key="c.category" class="border-b border-slate-100 hover:bg-slate-50">
+                  <td class="px-3 py-2 text-center font-semibold text-slate-400">{{ idx + 1 }}</td>
+                  <td class="px-3 py-2 text-slate-700">{{ c.category }}</td>
+                  <td class="px-3 py-2">
+                    <div class="flex items-center gap-2">
+                      <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div class="h-full bg-red-400 rounded-full" :style="{ width: c.rate + '%' }"></div>
+                      </div>
+                      <span class="text-xs font-semibold text-navy-800 w-10 text-right">{{ c.rate }}%</span>
+                    </div>
+                  </td>
+                  <td class="px-3 py-2 text-center text-slate-500">{{ c.n }}</td>
+                </tr>
+                <tr v-if="categoryWeaknessTop10.length === 0">
+                  <td colspan="4" class="text-center text-slate-400 py-8 text-sm">응시 데이터가 있는 회차가 없습니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 문항별 오답률 Top10 -->
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <h2 class="text-lg font-bold text-navy-900 mb-1">문항별 오답률 Top 10</h2>
+          <p class="text-sm text-slate-500 mb-4">응시생이 있는 전체 회차의 문항을 정답률 낮은 순으로 나열했습니다. 빈칸으로 남긴 문항도 오답으로 계산합니다. 객관식 문항은 선택지 분포를 함께 표기합니다 (<span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:#10b981"></span> 정답 · 나머지 색은 오답 선택지 구분 · <span class="inline-block w-2.5 h-2.5 rounded-sm align-middle" style="background:#94a3b8"></span> 무응답 — 각 칸에 마우스를 올리면 상세 비율을 볼 수 있습니다).</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="bg-navy-800 text-white text-left">
+                  <th class="px-3 py-2.5 font-semibold w-14 text-center">순위</th>
+                  <th class="px-3 py-2.5 font-semibold w-20 text-center">회차</th>
+                  <th class="px-3 py-2.5 font-semibold w-16 text-center">번호</th>
+                  <th class="px-3 py-2.5 font-semibold">분류</th>
+                  <th class="px-3 py-2.5 font-semibold w-16 text-center">유형</th>
+                  <th class="px-3 py-2.5 font-semibold w-40 text-center">정답률</th>
+                  <th class="px-3 py-2.5 font-semibold w-20 text-center">응시자수</th>
+                  <th class="px-3 py-2.5 font-semibold w-40 text-center">선택지 분포</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, idx) in itemWeaknessTop10" :key="row.round + '-' + row.number" class="border-b border-slate-100 hover:bg-slate-50">
+                  <td class="px-3 py-2 text-center font-semibold text-slate-400">{{ idx + 1 }}</td>
+                  <td class="px-3 py-2 text-center text-slate-600">{{ row.round }}회차</td>
+                  <td class="px-3 py-2 text-center font-semibold">{{ row.number }}</td>
+                  <td class="px-3 py-2 text-slate-700">{{ row.category }}</td>
+                  <td class="px-3 py-2 text-center text-slate-500">{{ row.type }}</td>
+                  <td class="px-3 py-2">
+                    <div class="flex items-center gap-2">
+                      <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div class="h-full bg-red-400 rounded-full" :style="{ width: row.rate + '%' }"></div>
+                      </div>
+                      <span class="text-xs font-semibold text-navy-800 w-10 text-right">{{ row.rate }}%</span>
+                    </div>
+                  </td>
+                  <td class="px-3 py-2 text-center text-slate-500">{{ row.n }}</td>
+                  <td class="px-3 py-2 text-center">
+                    <div v-if="row.choiceDist" class="inline-flex h-4 w-32 rounded overflow-hidden border border-slate-200" :title="choiceDistTitle(row)">
+                      <div v-for="d in row.choiceDist" :key="d.choice"
+                        class="h-full flex items-center justify-center text-[9px] leading-none text-white overflow-hidden"
+                        :style="{ width: d.percent + '%', backgroundColor: d.color }">{{ d.choice === '무응답' ? '무' : d.choice }}</div>
+                    </div>
+                    <span v-else class="text-xs text-slate-400">주관식</span>
+                  </td>
+                </tr>
+                <tr v-if="itemWeaknessTop10.length === 0">
+                  <td colspan="8" class="text-center text-slate-400 py-8 text-sm">응시 데이터가 있는 회차가 없습니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 1. 시험 정보 관리                                        -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'exam'" class="space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex flex-wrap items-end gap-4 justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-navy-900">시험 정보 관리</h2>
+            <p class="text-sm text-slate-500 mt-0.5">회차별 문항의 배점 · 정답 · 유형 · 분류를 관리합니다. 주관식 정답은 '.' 으로 표시하세요.</p>
+          </div>
+          <div class="flex items-end gap-2">
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">회차 선택</label>
+              <select v-model.number="examRound" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[120px]">
+                <option v-for="r in rounds" :key="r" :value="r">{{ r }}회차</option>
+              </select>
+            </div>
+            <div class="flex items-end gap-2">
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">새 회차 번호</label>
+                <input type="number" v-model.number="newRoundInput" min="1" class="border border-slate-300 rounded-lg px-3 py-2 text-sm w-24">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">문항 수</label>
+                <input type="number" v-model.number="newRoundItemCount" min="1" class="border border-slate-300 rounded-lg px-3 py-2 text-sm w-20">
+              </div>
+              <button @click="addRound" class="px-3 py-2 text-sm font-medium rounded-lg bg-navy-700 text-white hover:bg-navy-800">
+                + 회차 추가
+              </button>
+              <button @click="deleteRound" class="px-3 py-2 text-sm font-medium rounded-lg bg-red-50 text-red-600 hover:bg-red-100">
+                이 회차 삭제
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-100 text-sm text-slate-600">
+          현재 회차(<span class="font-semibold text-navy-800">{{ examRound }}회차</span>) 총 배점 :
+          <span class="font-bold text-navy-800 text-base">{{ fmt(roundMaxScore(examRound)) }}점</span>
+          <span class="text-slate-400">(문항 {{ currentExamItems.length }}개)</span>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-navy-800 text-white text-left">
+              <th class="px-3 py-2.5 font-semibold w-16">번호</th>
+              <th class="px-3 py-2.5 font-semibold w-24">배점</th>
+              <th class="px-3 py-2.5 font-semibold w-24">정답</th>
+              <th class="px-3 py-2.5 font-semibold w-32">유형</th>
+              <th class="px-3 py-2.5 font-semibold">분류</th>
+              <th class="px-3 py-2.5 font-semibold w-16 text-center">삭제</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in currentExamItems" :key="item.id" class="border-b border-slate-100 hover:bg-slate-50">
+              <td class="px-3 py-1"><input type="number" min="1" v-model.number="item.number" @input="touch" @keyup.enter="focusNextRow" class="tbl-input text-center font-semibold no-spinner"></td>
+              <td class="px-3 py-1"><input type="number" step="1" v-model.number="item.score" @input="touch" @keyup.enter="focusNextRow" class="tbl-input text-center"></td>
+              <td class="px-3 py-1"><input type="text" v-model="item.answer" @input="touch" @keyup.enter="focusNextRow" class="tbl-input text-center"></td>
+              <td class="px-3 py-1">
+                <select v-model="item.type" @change="onTypeChange(item)" @keyup.enter="focusNextRow" class="tbl-input text-center">
+                  <option value="객">객관식</option>
+                  <option value="주">주관식</option>
+                </select>
+              </td>
+              <td class="px-3 py-1"><input type="text" v-model="item.category" @input="touch" @keyup.enter="focusNextRow" class="tbl-input"></td>
+              <td class="px-3 py-1 text-center">
+                <button @click="deleteExamItem(item)" class="text-red-400 hover:text-red-600 text-xs font-medium">삭제</button>
+              </td>
+            </tr>
+            <tr v-if="currentExamItems.length === 0">
+              <td colspan="6" class="text-center text-slate-400 py-8 text-sm">등록된 문항이 없습니다. 아래 버튼으로 문항을 추가하세요.</td>
+            </tr>
+          </tbody>
+          <tfoot v-if="currentExamItems.length > 0">
+            <tr class="bg-slate-100 font-semibold border-t-2 border-slate-300">
+              <td class="px-3 py-2 text-center text-slate-500">합계</td>
+              <td class="px-3 py-2 text-center text-navy-800">{{ fmt(roundMaxScore(examRound)) }}</td>
+              <td colspan="4"></td>
+            </tr>
+          </tfoot>
+        </table>
+        <div class="p-3 border-t border-slate-100 bg-slate-50">
+          <button @click="addExamItem" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-navy-100 text-navy-800 hover:bg-navy-200">
+            + 문항 추가
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 2. 학생 답안 입력                                        -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'input'" class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+
+      <!-- 학생 관리 패널 -->
+      <div class="lg:col-span-1 bg-white rounded-xl border border-slate-200 shadow-sm p-4 h-fit">
+        <h3 class="font-bold text-navy-900 mb-3 text-sm">학생 관리</h3>
+        <div class="flex gap-2 mb-3">
+          <input type="text" v-model="newStudentName" @keyup.enter="addStudent" placeholder="학생 이름"
+            class="flex-1 border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm">
+          <button @click="addStudent" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-navy-700 text-white hover:bg-navy-800">추가</button>
+        </div>
+        <ul class="space-y-1 max-h-72 overflow-y-auto">
+          <li v-for="s in classStudents" :key="s.id"
+            class="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-sm"
+            :class="s.id === inputStudentId ? 'bg-navy-100 text-navy-900 font-medium' : 'hover:bg-slate-50'">
+            <button class="flex-1 text-left" @click="inputStudentId = s.id">
+              <span v-if="s.withdrawn" class="text-slate-400">(퇴원) </span>{{ s.name }}
+            </button>
+            <span class="flex items-center gap-2 shrink-0">
+              <button @click="renameStudent(s)" class="text-slate-400 hover:text-navy-700 text-xs">수정</button>
+              <button @click="toggleWithdraw(s)" class="text-slate-400 hover:text-navy-700 text-xs">{{ s.withdrawn ? '재원' : '퇴원' }}</button>
+              <button @click="deleteStudent(s)" class="text-red-300 hover:text-red-600 text-xs">삭제</button>
+            </span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 답안 입력 그리드 -->
+      <div class="lg:col-span-3 space-y-4">
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <div class="flex flex-wrap items-end gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">회차</label>
+              <select v-model.number="inputRound" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[120px]">
+                <option v-for="r in rounds" :key="r" :value="r">{{ r }}회차</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">학생</label>
+              <select v-model.number="inputStudentId" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[140px]">
+                <option v-for="s in classStudents" :key="s.id" :value="s.id">{{ s.withdrawn ? '(퇴원) ' : '' }}{{ s.name }}</option>
+              </select>
+            </div>
+            <div class="ml-auto text-sm text-slate-600" v-if="inputStudentId">
+              현재 총점 : <span class="font-bold text-navy-800">{{ fmt(studentTotal(inputStudentId, inputRound)) }}</span>
+              / {{ fmt(roundMaxScore(inputRound)) }}
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-sm" v-if="inputStudentId">
+            <thead>
+              <tr class="bg-navy-800 text-white text-left">
+                <th class="px-3 py-2.5 font-semibold w-14">번호</th>
+                <th class="px-3 py-2.5 font-semibold">분류</th>
+                <th class="px-3 py-2.5 font-semibold w-16 text-center">유형</th>
+                <th class="px-3 py-2.5 font-semibold w-20 text-center">배점</th>
+                <th class="px-3 py-2.5 font-semibold w-20 text-center">정답</th>
+                <th class="px-3 py-2.5 font-semibold w-40">기입(학생답안)</th>
+                <th class="px-3 py-2.5 font-semibold w-16 text-center">정오</th>
+                <th class="px-3 py-2.5 font-semibold w-24 text-center">점수</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in currentInputExamItems" :key="item.id" class="border-b border-slate-100 hover:bg-slate-50">
+                <td class="px-3 py-2 font-semibold text-center">{{ item.number }}</td>
+                <td class="px-3 py-2 text-slate-600">{{ item.category }}</td>
+                <td class="px-3 py-2 text-center text-slate-500">{{ item.type }}</td>
+                <td class="px-3 py-2 text-center">{{ fmt(item.score) }}</td>
+                <td class="px-3 py-2 text-center text-slate-500">{{ item.answer }}</td>
+                <td class="px-3 py-1">
+                  <input type="text" class="tbl-input"
+                    :value="answerFor(inputStudentId, inputRound, item.number).input"
+                    @input="setInput(item, $event.target.value)"
+                    @keyup.enter="focusNextRow">
+                </td>
+                <td class="px-3 py-2 text-center">
+                  <span class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold"
+                    :class="gradeBadgeClass(displayResult(item, answerFor(inputStudentId, inputRound, item.number), inputStudentId, inputRound))">
+                    {{ displayResult(item, answerFor(inputStudentId, inputRound, item.number), inputStudentId, inputRound) || '-' }}
+                  </span>
+                </td>
+                <td class="px-3 py-1 text-center">
+                  <input v-if="item.type === '주'" type="number" step="0.1" min="0" :max="item.score" class="tbl-input text-center"
+                    :value="answerFor(inputStudentId, inputRound, item.number).manualScore"
+                    @input="setManualScore(item, $event.target.value)"
+                    @keyup.enter="focusNextRow">
+                  <span v-else class="font-semibold text-navy-800">
+                    {{ fmt(gradeAnswer(item, answerFor(inputStudentId, inputRound, item.number)).score) }}
+                  </span>
+                </td>
+              </tr>
+              <tr v-if="currentInputExamItems.length === 0">
+                <td colspan="8" class="text-center text-slate-400 py-8">해당 회차에 등록된 문항이 없습니다. [시험 정보 관리] 탭에서 먼저 문항을 등록하세요.</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="text-center text-slate-400 py-16 text-sm">학생을 선택하면 답안 입력 그리드가 표시됩니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 3. 전체 점수 및 통계                                     -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'stats'" class="space-y-6">
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-lg font-bold text-navy-900 mb-1">회차별 총점 매트릭스</h2>
+        <p class="text-sm text-slate-500 mb-4">학생별 회차 총점과 석차입니다. (총점 / 석차)</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm border-collapse">
+            <thead>
+              <tr class="bg-navy-800 text-white">
+                <th class="px-3 py-2.5 text-left font-semibold sticky left-0 bg-navy-800">
+                  <button @click="toggleMatrixSort('name')" class="inline-flex items-center gap-1 hover:text-navy-200" title="이름 가나다순 정렬">
+                    <span>이름</span>
+                    <span class="text-[10px] leading-none">
+                      <template v-if="matrixSort.key === 'name'">{{ matrixSort.dir === 'desc' ? '▼' : '▲' }}</template>
+                      <template v-else>↕</template>
+                    </span>
+                  </button>
+                </th>
+                <th v-for="r in rounds" :key="r" class="px-3 py-2.5 font-semibold text-center min-w-[100px]">
+                  <button @click="toggleMatrixSort(r)" class="inline-flex items-center gap-1 hover:text-navy-200" title="이 회차 점수로 정렬">
+                    <span>{{ r }}회차</span>
+                    <span class="text-[10px] leading-none">
+                      <template v-if="matrixSort.key === r">{{ matrixSort.dir === 'desc' ? '▼' : '▲' }}</template>
+                      <template v-else>↕</template>
+                    </span>
+                  </button>
+                </th>
+                <th class="px-3 py-2.5 font-semibold text-center min-w-[100px] bg-navy-700">평균</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in sortedMatrixStudents" :key="s.id" class="border-b border-slate-100 hover:bg-slate-50">
+                <td class="px-3 py-2 font-medium sticky left-0 bg-white"><span v-if="s.withdrawn" class="text-slate-400">(퇴원) </span>{{ s.name }}</td>
+                <td v-for="r in rounds" :key="r" class="px-3 py-2 text-center">
+                  <span class="font-semibold text-navy-800">{{ fmt(matrixCell(s.id, r).total) }}</span>
+                  <span class="text-xs text-slate-400"> ({{ matrixCell(s.id, r).rank }}위)</span>
+                </td>
+                <td class="px-3 py-2 text-center font-semibold bg-slate-50">{{ fmt(studentAverage(s.id)) }}</td>
+              </tr>
+              <tr v-if="classStudents.length === 0">
+                <td :colspan="rounds.length + 2" class="text-center text-slate-400 py-8">등록된 학생이 없습니다.</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr class="bg-slate-100 font-semibold">
+                <td class="px-3 py-2 sticky left-0 bg-slate-100">학급 평균</td>
+                <td v-for="r in rounds" :key="r" class="px-3 py-2 text-center">{{ fmt(classAverage(r)) }}</td>
+                <td class="px-3 py-2 text-center">-</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-end justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold text-navy-900">문항별 정답률</h2>
+            <p class="text-sm text-slate-500 mt-0.5">회차 응시자 중 해당 문항을 맞춘(정오=O) 학생의 비율입니다. 빈칸으로 남긴 경우도 오답으로 계산합니다.</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">회차 선택</label>
+            <select v-model.number="statsRound" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[120px]">
+              <option v-for="r in rounds" :key="r" :value="r">{{ r }}회차</option>
+            </select>
+          </div>
+        </div>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-navy-800 text-white text-left">
+              <th class="px-3 py-2.5 font-semibold w-16">번호</th>
+              <th class="px-3 py-2.5 font-semibold">분류</th>
+              <th class="px-3 py-2.5 font-semibold w-16 text-center">유형</th>
+              <th class="px-3 py-2.5 font-semibold w-20 text-center">배점</th>
+              <th class="px-3 py-2.5 font-semibold w-40 text-center">정답률</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in examItemsForRound(statsRound)" :key="item.id" class="border-b border-slate-100 hover:bg-slate-50">
+              <td class="px-3 py-2 text-center font-semibold">{{ item.number }}</td>
+              <td class="px-3 py-2 text-slate-600">{{ item.category }}</td>
+              <td class="px-3 py-2 text-center text-slate-500">{{ item.type }}</td>
+              <td class="px-3 py-2 text-center">{{ fmt(item.score) }}</td>
+              <td class="px-3 py-2">
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div class="h-full bg-navy-500 rounded-full" :style="{ width: itemCorrectRate(statsRound, item.number) + '%' }"></div>
+                  </div>
+                  <span class="text-xs font-semibold text-navy-800 w-10 text-right">{{ itemCorrectRate(statsRound, item.number) }}%</span>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 4. 전달사항 관리                                         -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'notes'" class="space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-end justify-between flex-wrap gap-4">
+          <div>
+            <h2 class="text-lg font-bold text-navy-900">전달사항 관리</h2>
+            <p class="text-sm text-slate-500 mt-0.5">학생별 · 회차별 총평 및 전달사항을 입력합니다.</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">회차 선택</label>
+            <select v-model.number="notesRound" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[120px]">
+              <option v-for="r in rounds" :key="r" :value="r">{{ r }}회차</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <div v-for="s in attemptedStudents(notesRound)" :key="s.id" class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-3">
+              <span class="font-bold text-navy-900"><span v-if="s.withdrawn" class="text-slate-400 font-normal">(퇴원) </span>{{ s.name }}</span>
+              <span class="text-xs text-slate-400">{{ notesRound }}회차</span>
+            </div>
+            <div class="text-sm text-slate-600">
+              점수 : <span class="font-semibold text-navy-800">{{ fmt(studentTotal(s.id, notesRound)) }}</span> / {{ fmt(roundMaxScore(notesRound)) }}
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-4 mb-2 text-sm">
+            <div class="flex items-center gap-1.5">
+              <label class="text-xs font-medium text-slate-500">과제수행도</label>
+              <input type="number" min="0" max="10" step="1"
+                class="w-16 border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                placeholder="0~10"
+                :value="noteFor(s.id, notesRound).taskScore"
+                @change="setTaskScore(s.id, notesRound, $event.target.value)">
+            </div>
+            <div class="flex items-center gap-1.5">
+              <label class="text-xs font-medium text-slate-500">클리닉 참석여부</label>
+              <select
+                class="border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                :value="noteFor(s.id, notesRound).clinicStatus"
+                @change="setClinicStatus(s.id, notesRound, $event.target.value)">
+                <option value="none">미해당</option>
+                <option value="attend">참</option>
+                <option value="absent">불참</option>
+              </select>
+            </div>
+            <label class="flex items-center gap-1.5 text-sm text-slate-600 select-none cursor-pointer">
+              <input type="checkbox"
+                class="w-4 h-4 accent-navy-700"
+                :checked="noteFor(s.id, notesRound).nextClinic"
+                @change="setNextClinic(s.id, notesRound, $event.target.checked)">
+              차주 클리닉 해당
+            </label>
+          </div>
+          <textarea rows="2"
+            class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-navy-300 mb-2"
+            placeholder="과제수행도 / 클리닉 참석여부를 선택하면 자동으로 채워집니다. 자유롭게 수정 가능합니다."
+            :value="noteFor(s.id, notesRound).taskClinicText"
+            @input="setTaskClinicText(s.id, notesRound, $event.target.value)"></textarea>
+          <textarea rows="2"
+            class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-navy-300"
+            placeholder="총평 및 전달사항을 입력하세요."
+            :value="noteFor(s.id, notesRound).comment"
+            @input="setNote(s.id, notesRound, $event.target.value)"></textarea>
+        </div>
+        <div v-if="attemptedStudents(notesRound).length === 0" class="text-center text-slate-400 py-8 text-sm">이 회차에 응시한 학생이 없습니다.</div>
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 5. 성적표 출력 및 인쇄                                   -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'report'" class="space-y-4">
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 no-print">
+        <div class="flex flex-wrap items-end gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">학생 선택 <span class="text-slate-400 font-normal">(미응시 학생 제외)</span></label>
+            <div class="flex items-center gap-1">
+              <button @click="goAdjacentStudent(-1)" title="이전 학생"
+                class="w-9 h-[38px] flex items-center justify-center border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50">‹</button>
+              <select v-model.number="reportStudentId" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[140px]">
+                <option v-for="s in reportStudents" :key="s.id" :value="s.id">{{ s.name }}</option>
+              </select>
+              <button @click="goAdjacentStudent(1)" title="다음 학생"
+                class="w-9 h-[38px] flex items-center justify-center border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50">›</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">회차 선택</label>
+            <select v-model.number="reportRound" class="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[120px]">
+              <option v-for="r in rounds" :key="r" :value="r">{{ r }}회차</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-1.5 text-sm text-slate-600 pb-2 select-none cursor-pointer">
+            <input type="checkbox" v-model="hideRank" class="w-4 h-4 accent-navy-700">
+            석차 미노출
+          </label>
+          <button @click="copyReportImage" :disabled="capturing"
+            class="ml-auto px-4 py-2 text-sm font-semibold rounded-lg bg-navy-700 text-white hover:bg-navy-800 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5">
+            <span v-if="capturing">⏳ 캡처 중...</span>
+            <span v-else>🖼 이미지 복사하기</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="reportStudent" id="print-area" class="bg-white rounded-xl border border-slate-200 shadow-sm p-8 max-w-3xl mx-auto print:shadow-none print:border-0 print:rounded-none">
+        <!-- 성적표 헤더 -->
+        <div class="flex items-center justify-between border-b-2 border-navy-800 pb-4 mb-6">
+          <div>
+            <h1 class="text-xl font-bold text-navy-900">고세종T 테스트 성적표</h1>
+            <p class="text-sm text-slate-500 mt-1">{{ currentClass ? currentClass.name : '' }} - {{ reportRound }}회차</p>
+          </div>
+          <div class="text-right text-sm text-slate-500">
+            <div>성명 : <span class="font-semibold text-slate-800">{{ reportStudent.name }}</span></div>
+            <div>출력일 : {{ todayStr }}</div>
+          </div>
+        </div>
+
+        <!-- 점수 요약 -->
+        <div class="grid gap-3 mb-6" :class="hideRank ? 'grid-cols-2' : 'grid-cols-3'">
+          <div class="rounded-lg bg-navy-50 border border-navy-100 p-4 text-center">
+            <div class="text-xs text-navy-600 font-medium mb-1">획득 점수 / 만점</div>
+            <div class="text-xl font-bold text-navy-900">{{ fmt(studentTotal(reportStudentId, reportRound)) }} / {{ fmt(roundMaxScore(reportRound)) }}</div>
+          </div>
+          <div class="rounded-lg bg-navy-50 border border-navy-100 p-4 text-center">
+            <div class="text-xs text-navy-600 font-medium mb-1">반 평균</div>
+            <div class="text-xl font-bold text-navy-900">{{ fmt(classAverage(reportRound)) }}</div>
+          </div>
+          <div v-if="!hideRank" class="rounded-lg bg-navy-50 border border-navy-100 p-4 text-center">
+            <div class="text-xs text-navy-600 font-medium mb-1">석차</div>
+            <div class="text-xl font-bold text-navy-900">{{ studentRank(reportStudentId, reportRound) }} / {{ attemptedStudents(reportRound).length }}</div>
+          </div>
+        </div>
+
+        <!-- 문항별 세부 평가 결과 -->
+        <h3 class="text-sm font-bold text-navy-900 mb-2">문항별 평가 결과</h3>
+        <table class="w-full text-xs border border-slate-200 mb-6">
+          <thead>
+            <tr class="bg-navy-800 text-white">
+              <th class="px-2 py-1 font-semibold border border-navy-700 w-14">번호</th>
+              <th class="px-2 py-1 font-semibold border border-navy-700">평가요소</th>
+              <th class="px-2 py-1 font-semibold border border-navy-700 w-12">유형</th>
+              <th class="px-2 py-1 font-semibold border border-navy-700 w-14">정오</th>
+              <th class="px-2 py-1 font-semibold border border-navy-700 w-20">점수</th>
+              <th class="px-2 py-1 font-semibold border border-navy-700 w-16">정답률</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in itemReport" :key="row.item.id" class="border-b border-slate-100">
+              <td class="px-2 py-1 border border-slate-200 text-center">{{ row.item.number }}</td>
+              <td class="px-2 py-1 border border-slate-200">{{ row.item.category }}</td>
+              <td class="px-2 py-1 border border-slate-200 text-center text-slate-500">{{ row.item.type }}</td>
+              <td class="px-2 py-1 border border-slate-200 text-center">
+                <span class="inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold" :class="gradeBadgeClass(row.result)">{{ row.result || '-' }}</span>
+              </td>
+              <td class="px-2 py-1 border border-slate-200 text-center font-medium">{{ fmt(row.score) }} / {{ fmt(row.item.score) }}</td>
+              <td class="px-2 py-1 border border-slate-200 text-center">{{ itemCorrectRate(reportRound, row.item.number) }}%</td>
+            </tr>
+            <tr v-if="itemReport.length === 0">
+              <td colspan="6" class="text-center text-slate-400 py-4">등록된 문항이 없습니다.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- 유형별/영역별 세부 평가 결과 + 회차별 누적 점수 (2단 배치) -->
+        <div class="grid grid-cols-2 gap-4 mb-6">
+          <div>
+            <h3 class="text-sm font-bold text-navy-900 mb-2">유형별/영역별 세부 평가 결과 (점수)</h3>
+            <div class="border border-slate-200 rounded-lg p-4">
+              <div class="flex text-[10px] text-slate-400 mb-2">
+                <span class="w-28 shrink-0"></span>
+                <span class="flex-1 flex justify-between"><span>0%</span><span>50%</span><span>100%</span></span>
+                <span class="w-10"></span>
+              </div>
+              <div class="space-y-1">
+                <div v-for="c in categoryScores" :key="c.category" class="flex items-center gap-2 text-xs">
+                  <div class="w-28 shrink-0 text-slate-600 truncate" :title="c.category">{{ c.category }}</div>
+                  <div class="flex-1 h-2.5 bg-slate-100 rounded overflow-hidden">
+                    <div class="h-full bg-navy-500 rounded" :style="{ width: c.percent + '%' }"></div>
+                  </div>
+                  <div class="w-10 text-right font-semibold text-navy-800">{{ fmt(c.achieved) }}</div>
+                </div>
+                <div v-if="categoryScores.length === 0" class="text-center text-slate-400 py-4 text-xs">데이터가 없습니다.</div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-sm font-bold text-navy-900 mb-2">지난 회차 평가 결과 (최근 5회차)</h3>
+            <div class="border border-slate-200 rounded-lg p-4">
+              <div class="flex items-center gap-4 mb-1 text-[11px] font-bold text-slate-500">
+                <div class="flex items-center gap-1"><span class="w-3 h-0.5 bg-slate-300 inline-block"></span>평균</div>
+                <div class="flex items-center gap-1"><span class="w-3 h-0.5 bg-navy-600 inline-block"></span>점수</div>
+              </div>
+              <svg viewBox="0 0 600 300" class="w-full block" style="aspect-ratio: 600 / 300;">
+                <line x1="44" y1="39" x2="556" y2="39" stroke="#e2e8f0" stroke-width="2" />
+                <line x1="44" y1="144" x2="556" y2="144" stroke="#e2e8f0" stroke-width="2" />
+                <line x1="44" y1="249" x2="556" y2="249" stroke="#94a3b8" stroke-width="2" />
+
+                <polyline :points="trendAvgPath" fill="none" stroke="#cbd5e1" stroke-width="4" />
+                <polyline v-for="(seg, i) in trendScoreSegments" :key="'seg'+i" :points="seg" fill="none" stroke="#2c4a6e" stroke-width="5" />
+
+                <g v-for="(p, i) in trendPoints" :key="i">
+                  <circle :cx="p.x" :cy="p.avgY" r="6" fill="#cbd5e1" />
+                  <circle v-if="p.taken" :cx="p.x" :cy="p.scoreY" r="7" fill="#2c4a6e" />
+                  <text v-if="p.taken" :x="p.x" :y="Math.max(36, p.scoreY - 24)" text-anchor="middle" font-size="22" font-weight="600" fill="#182a41" paint-order="stroke" stroke="white" stroke-width="4" stroke-linejoin="round">{{ fmt(p.score) }}</text>
+                  <text :x="p.x" y="286" text-anchor="middle" font-size="20" fill="#94a3b8" paint-order="stroke" stroke="white" stroke-width="4" stroke-linejoin="round">{{ p.label }}</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- 전달사항 -->
+        <h3 class="text-sm font-bold text-navy-900 mb-2">전달사항 및 피드백</h3>
+        <div class="rounded-lg border border-slate-200 p-4 text-sm text-slate-700 min-h-[70px] whitespace-pre-wrap bg-slate-50">
+          {{ combinedNote(reportStudentId, reportRound) || '작성된 전달사항이 없습니다.' }}
+        </div>
+      </div>
+
+      <div v-else class="text-center text-slate-400 py-16 text-sm no-print">학생과 회차를 선택하면 성적표가 표시됩니다.</div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- 탭 6. 기타 (수동 백업)                                     -->
+    <!-- ========================================================= -->
+    <section v-if="activeTab === 'etc'" class="space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-lg font-bold text-navy-900 mb-1">사용법</h2>
+        <p class="text-sm text-slate-500 mb-4">
+          탭별 사용 방법과 주의사항을 정리한 문서입니다.
+        </p>
+        <a href="manual.html" target="_blank" rel="noopener" class="inline-flex px-4 py-2 text-sm font-medium rounded-lg bg-navy-100 text-navy-800 hover:bg-navy-200">📖 사용법 문서 열기</a>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-lg font-bold text-navy-900 mb-1">수동 백업 (다운로드 / 불러오기)</h2>
+        <p class="text-sm text-slate-500 mb-4">
+          모든 반의 데이터를 JSON 파일로 내보내거나, 이전에 내보낸 JSON 파일을 불러와 복원합니다.
+        </p>
+        <div class="flex flex-wrap gap-3">
+          <button @click="exportData" class="px-4 py-2 text-sm font-medium rounded-lg bg-navy-700 text-white hover:bg-navy-800">⬇ 백업 다운로드</button>
+          <button @click="triggerImport" class="px-4 py-2 text-sm font-medium rounded-lg bg-navy-100 text-navy-800 hover:bg-navy-200">⬆ 백업 불러오기</button>
+          <input type="file" ref="fileInput" accept="application/json,.json" class="hidden" @change="importData">
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-lg font-bold text-navy-900 mb-1">수정 이력</h2>
+        <p class="text-sm text-slate-500 mb-4">
+          점수 · 답안 · 전달사항이 언제, 누구에 의해 어떻게 바뀌었는지 최근 기록을 확인합니다.
+        </p>
+        <button @click="openAuditLog" class="px-4 py-2 text-sm font-medium rounded-lg bg-navy-700 text-white hover:bg-navy-800">🕒 최근 수정 기록 보기</button>
+      </div>
+    </section>
+
+  </main>
+
+  </template>
+</div>
+
+<script type="module">
+// ---------- Firebase (App / Auth / Firestore) ----------
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  addDoc,
+  serverTimestamp,
+  query,
+  orderBy,
+  limit,
+  getDocs,
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyD58bO7fC4SG3ULFEFQRpOhzaT3X7-hQ8A",
+  authDomain: "sejong-tds.firebaseapp.com",
+  projectId: "sejong-tds",
+  storageBucket: "sejong-tds.firebasestorage.app",
+  messagingSenderId: "162781737960",
+  appId: "1:162781737960:web:f1454c9efd963889292a5d",
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const firestoreDb = getFirestore(firebaseApp);
+// 모든 반의 성적 데이터를 하나의 문서(collection('gradebook').doc('data'))에 저장한다.
+const GRADEBOOK_DOC = doc(firestoreDb, 'gradebook', 'data');
+
+const { createApp } = Vue;
+
+createApp({
+  data() {
+    return {
+      activeTab: 'exam',
+
+      tabs: [
+        { key: 'class', label: '반 정보 관리' },
+        { key: 'dashboard', label: '반별 대시보드' },
+        { key: 'exam',  label: '시험 정보 관리' },
+        { key: 'input', label: '학생 답안 입력' },
+        { key: 'stats', label: '전체 점수 및 통계' },
+        { key: 'notes', label: '전달사항 관리' },
+        { key: 'report', label: '성적표 출력 및 인쇄' },
+        { key: 'etc', label: '기타' },
+      ],
+
+      // ---- 필터 / 선택 상태 ----
+      currentClassId: 1,
+      newClassName: '',
+      examRound: 2,
+      newRoundInput: 3,
+      newRoundItemCount: 5,
+      inputRound: 2,
+      inputStudentId: 1,
+      statsRound: 2,
+      notesRound: 2,
+      reportStudentId: 1,
+      reportRound: 2,
+      hideRank: false,
+      matrixSort: { key: null, dir: 'desc' },
+      newStudentName: '',
+      capturing: false,
+      toast: { show: false, message: '', type: 'success' },
+      toastTimer: null,
+
+      // ---- 인증 / 클라우드 동기화 상태 ----
+      authChecking: true,   // Firebase가 로그인 세션을 확인하는 동안 true
+      user: null,           // 로그인된 Firebase 사용자
+      loginEmail: '',
+      loginPassword: '',
+      loginError: '',
+      loggingIn: false,
+      dataLoading: false,   // Firestore에서 데이터를 불러오는 중
+      dataSaving: false,    // Firestore에 데이터를 저장하는 중
+      dataLoaded: false,    // 최초 로드가 끝나기 전까지는 저장 watcher를 막는다
+      saveTimer: null,
+      dirty: 0,             // db를 실제로 변경한 지점에서만 touch()로 증가시키는 저장 트리거
+
+      // ---- 수정 이력(Audit Log) ----
+      pendingAuditChanges: {}, // 저장 전까지 임시로 모아두는 변경분 (key -> {studentName, round, targetField, oldValue, newValue})
+      auditModalOpen: false,
+      auditLogs: [],
+      auditLoading: false,
+
+      // ---- 핵심 데이터 (Firestore 저장 대상) ----
+      db: {
+        classes: [
+          { id: 1, name: '선덕고 화요일반' },
+          { id: 2, name: '선덕고 목요일반' },
+        ],
+        students: [
+          { id: 1, name: '강우현', classId: 1 },
+          { id: 2, name: '김서찬', classId: 1 },
+        ],
+        examInfo: [
+          { id: 1, round: 2, number: 1, score: 3.5, answer: '.', type: '주', category: '별의 진화와 원소의 생성', classId: 1 },
+          { id: 2, round: 2, number: 2, score: 3.5, answer: '2', type: '객', category: '우주의 팽창', classId: 1 },
+          { id: 3, round: 2, number: 3, score: 3.5, answer: '3', type: '객', category: '허블 법칙', classId: 1 },
+          { id: 4, round: 2, number: 4, score: 3.5, answer: '1', type: '객', category: '별의 진화', classId: 1 },
+          { id: 5, round: 2, number: 5, score: 3.5, answer: '4', type: '객', category: '별의 탄생', classId: 1 },
+        ],
+        answers: [
+          // 강우현 (studentId 1) — 주관식(1번)은 "기입" 칸에 점수를 적으면 자동으로 "점수" 칸에도 복사된다(setInput 참고).
+          { id: 1, studentId: 1, round: 2, number: 1, input: '3.5', manualScore: 3.5 },
+          { id: 2, studentId: 1, round: 2, number: 2, input: '2', manualScore: null },
+          { id: 3, studentId: 1, round: 2, number: 3, input: '1', manualScore: null },
+          { id: 4, studentId: 1, round: 2, number: 4, input: '1', manualScore: null },
+          { id: 5, studentId: 1, round: 2, number: 5, input: '4', manualScore: null },
+          // 김서찬 (studentId 2)
+          { id: 6, studentId: 2, round: 2, number: 1, input: '2', manualScore: 2 },
+          { id: 7, studentId: 2, round: 2, number: 2, input: '2', manualScore: null },
+          { id: 8, studentId: 2, round: 2, number: 3, input: '3', manualScore: null },
+          { id: 9, studentId: 2, round: 2, number: 4, input: '2', manualScore: null },
+          { id: 10, studentId: 2, round: 2, number: 5, input: '3', manualScore: null },
+        ],
+        notes: [
+          { id: 1, studentId: 1, round: 2, comment: '전반적으로 개념을 잘 이해하고 있습니다. 3번 문항(허블 법칙)은 추가 복습이 필요해요.' },
+          { id: 2, studentId: 2, round: 2, comment: '객관식 실수가 잦습니다. 4, 5번 문항 오답노트 작성을 권장하며, 주관식 서술도 조금 더 구체적으로 보완하면 좋겠습니다.' },
+        ],
+        // 회차별(반 공통) 클리닉 일정. 학생별이 아니라 classId+round 단위로 하나씩 존재한다.
+        roundSchedules: [],
+      },
+    };
+  },
+
+  created() {
+    // Firebase 로그인 상태를 구독한다. 로그인되면 Firestore에서 데이터를 불러오고,
+    // 로그아웃되면 화면을 초기화한다.
+    onAuthStateChanged(auth, (u) => this.handleAuthChange(u));
+  },
+
+  watch: {
+    // db 전체를 deep watch하면 값 하나만 바뀌어도 Vue가 매번 전체 트리를 다시 순회해야 해서
+    // 데이터가 쌓일수록(반/학생/회차가 늘수록) 입력할 때마다 버벅이게 된다. 대신 db를 실제로
+    // 바꾸는 지점에서만 touch()로 dirty를 증가시키고, 이 가벼운 숫자만 watch한다.
+    dirty() {
+      // 최초 Firestore 로드가 끝나기 전이거나 로그인 전에는 저장하지 않는다
+      // (빈 데모 데이터로 클라우드 데이터를 덮어쓰는 것을 방지).
+      if (!this.dataLoaded || !this.user) return;
+      clearTimeout(this.saveTimer);
+      this.saveTimer = setTimeout(() => { this.persistToFirestore(); }, 800);
+    },
+    currentClassId(val) {
+      if (val) {
+        try { localStorage.setItem('lastClassId', String(val)); } catch (e) {}
+      }
+      this.applyLatestRoundDefaults();
+    },
+    reportRound() {
+      // 회차를 바꿨을 때 현재 선택된 학생이 그 회차에 미응시라면(목록에서 숨겨지므로)
+      // 응시한 첫 번째 학생으로 자동 전환한다.
+      if (this.reportStudentId && !this.reportStudents.some(s => s.id === this.reportStudentId)) {
+        this.reportStudentId = this.reportStudents.length ? this.reportStudents[0].id : null;
+      }
+    },
+  },
+
+  computed: {
+    currentClass() {
+      return this.db.classes.find(c => c.id === this.currentClassId) || null;
+    },
+    activeClasses() {
+      return this.db.classes.filter(c => !c.archived).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    },
+    archivedClasses() {
+      return this.db.classes.filter(c => c.archived).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    },
+    classStudents() {
+      return this.db.students
+        .filter(s => s.classId === this.currentClassId)
+        .sort((a, b) => {
+          if (!!a.withdrawn !== !!b.withdrawn) return a.withdrawn ? 1 : -1;
+          return a.name.localeCompare(b.name, 'ko');
+        });
+    },
+    // ---------- 조회 성능용 인덱스 ----------
+    // studentId+round+number로 답안을 찾을 때 db.answers 전체를 매번 선형탐색하지 않도록,
+    // 한 번만 Map으로 인덱싱해두고 재사용한다. db.answers가 실제로 바뀔 때만(push/재할당) 다시 빌드된다.
+    answersIndex() {
+      const map = new Map();
+      this.db.answers.forEach(a => {
+        map.set(`${a.studentId}_${a.round}_${a.number}`, a);
+      });
+      return map;
+    },
+    // 현재 반의 문항을 회차별로 미리 묶어둔다. examItemsForRound가 항상 currentClassId 기준이라
+    // 반 단위로만 캐시하면 충분하다.
+    examInfoByRound() {
+      const map = new Map();
+      this.db.examInfo.forEach(e => {
+        if (e.classId !== this.currentClassId) return;
+        if (!map.has(e.round)) map.set(e.round, []);
+        map.get(e.round).push(e);
+      });
+      map.forEach(list => list.sort((a, b) => a.number - b.number));
+      return map;
+    },
+    // 회차별 응시자 목록도 한 번만 계산해서 재사용한다 (매트릭스/통계에서 반복 호출되므로).
+    attemptedStudentsByRound() {
+      const map = new Map();
+      this.rounds.forEach(round => {
+        map.set(round, this.classStudents.filter(s => this.hasAttempted(s.id, round)));
+      });
+      return map;
+    },
+    // 회차별 총점 매트릭스용 데이터. 셀 하나당 재계산하던 것을 회차당 한 번만 계산해서
+    // Map(round -> Map(studentId -> { total, rank }))로 캐시한다.
+    matrixData() {
+      const map = new Map();
+      this.rounds.forEach(round => {
+        const attendeeIds = new Set(this.attemptedStudentsByRound.get(round).map(s => s.id));
+        const totalsByStudent = this.classStudents.map(s => ({ id: s.id, total: this.studentTotal(s.id, round) }));
+        const sortedAttendeeTotals = totalsByStudent
+          .filter(t => attendeeIds.has(t.id))
+          .map(t => t.total)
+          .sort((a, b) => b - a);
+        // 동점자는 같은(먼저 나온) 순위를 받는다 — 기존 findIndex 기반 로직과 동일한 동점 처리.
+        const rankByTotal = new Map();
+        sortedAttendeeTotals.forEach((val, idx) => {
+          if (!rankByTotal.has(val)) rankByTotal.set(val, idx + 1);
+        });
+        const cellMap = new Map();
+        totalsByStudent.forEach(t => {
+          cellMap.set(t.id, { total: t.total, rank: rankByTotal.get(t.total) || 0 });
+        });
+        map.set(round, cellMap);
+      });
+      return map;
+    },
+    reportStudents() {
+      if (!this.reportRound) return this.classStudents;
+      return this.classStudents.filter(s => this.hasAttempted(s.id, this.reportRound));
+    },
+    sortedMatrixStudents() {
+      if (!this.matrixSort.key) return this.classStudents;
+      const dir = this.matrixSort.dir === 'asc' ? 1 : -1;
+      if (this.matrixSort.key === 'name') {
+        return [...this.classStudents].sort((a, b) => a.name.localeCompare(b.name, 'ko') * dir);
+      }
+      const round = this.matrixSort.key;
+      return [...this.classStudents].sort((a, b) => (this.matrixCell(a.id, round).total - this.matrixCell(b.id, round).total) * dir);
+    },
+    rounds() {
+      const set = new Set(
+        this.db.examInfo.filter(e => e.classId === this.currentClassId).map(e => e.round)
+      );
+      return [...set].sort((a, b) => a - b);
+    },
+    currentExamItems() {
+      return this.db.examInfo
+        .filter(e => e.classId === this.currentClassId && e.round === this.examRound)
+        .sort((a, b) => a.number - b.number);
+    },
+    currentInputExamItems() {
+      return this.examItemsForRound(this.inputRound);
+    },
+    reportStudent() {
+      return this.db.students.find(s => s.id === this.reportStudentId) || null;
+    },
+    itemReport() {
+      if (!this.reportStudentId) return [];
+      return this.examItemsForRound(this.reportRound).map(item => {
+        const entry = this.findAnswer(this.reportStudentId, this.reportRound, item.number);
+        const graded = this.gradeAnswer(item, entry);
+        const result = this.displayResult(item, entry, this.reportStudentId, this.reportRound);
+        return { item, input: entry ? entry.input : '', result, score: graded.score };
+      });
+    },
+    categoryScores() {
+      if (!this.reportStudentId || !this.reportRound) return [];
+      const map = new Map();
+      this.examItemsForRound(this.reportRound).forEach(item => {
+        const entry = this.findAnswer(this.reportStudentId, this.reportRound, item.number);
+        const graded = this.gradeAnswer(item, entry);
+        const key = item.category || '(미분류)';
+        if (!map.has(key)) map.set(key, { category: key, achieved: 0, max: 0 });
+        const bucket = map.get(key);
+        bucket.achieved += graded.score;
+        bucket.max += Number(item.score);
+      });
+      const list = [...map.values()];
+      return list.map(c => ({ ...c, percent: c.max > 0 ? Math.round((c.achieved / c.max) * 100) : 0 }));
+    },
+    roundTrend() {
+      if (!this.reportRound || !this.reportStudentId) return [];
+      const upTo = this.rounds
+        .filter(r => r <= this.reportRound && this.hasAttempted(this.reportStudentId, r))
+        .sort((a, b) => a - b);
+      const last5 = upTo.slice(-5);
+      const slots = Array.from({ length: 5 - last5.length }, () => ({ label: '미시행', score: 0, average: 0, taken: false }));
+      last5.forEach(r => {
+        slots.push({
+          label: r + '회',
+          score: this.studentTotal(this.reportStudentId, r),
+          average: this.classAverage(r),
+          taken: true,
+        });
+      });
+      return slots;
+    },
+    trendMax() {
+      const values = this.roundTrend.flatMap(s => [s.score, s.average]).filter(v => v !== null && v !== undefined);
+      const max = Math.max(1, ...values);
+      return Math.ceil(max / 5) * 5;
+    },
+    trendPoints() {
+      const chartH = 210, padT = 39, padL = 44, padR = 44, stepX = (600 - padL - padR) / (this.roundTrend.length - 1 || 1);
+      return this.roundTrend.map((s, i) => ({
+        ...s,
+        x: padL + i * stepX,
+        scoreY: s.score == null ? null : padT + chartH - (s.score / this.trendMax) * chartH,
+        avgY: padT + chartH - (s.average / this.trendMax) * chartH,
+      }));
+    },
+    trendScoreSegments() {
+      const segments = [];
+      let current = [];
+      this.trendPoints.forEach(p => {
+        if (p.taken && p.scoreY != null) {
+          current.push(`${p.x},${p.scoreY}`);
+        } else if (current.length) {
+          segments.push(current.join(' '));
+          current = [];
+        }
+      });
+      if (current.length) segments.push(current.join(' '));
+      return segments;
+    },
+    trendAvgPath() {
+      return this.trendPoints.map(p => `${p.x},${p.avgY}`).join(' ');
+    },
+    todayStr() {
+      const d = new Date();
+      return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
+    },
+
+    // ---------- 반별 대시보드 ----------
+    attendanceByRound() {
+      const rows = this.rounds.map(round => ({
+        round,
+        count: this.attemptedStudents(round).length,
+        average: this.classAverage(round),
+      }));
+      const maxCount = Math.max(1, ...rows.map(r => r.count));
+      return rows.map(r => ({
+        ...r,
+        heightPercent: r.count === 0 ? 0 : Math.max(6, Math.round((r.count / maxCount) * 100)),
+      }));
+    },
+    // 응시생이 있는 회차의 문항들을, 분류(단원)별로 (득점 합계 / 배점 합계)로 풀링한 정답률.
+    // 객관식은 정답=만점/오답=0이라 자연히 정오 비율과 같아지고, 주관식은 부분점수가 반영된다.
+    // 분모는 회차 응시자 전체이며, 문항을 빈칸으로 남긴 경우도 오답(0점)으로 포함한다.
+    categoryWeaknessStats() {
+      const map = new Map();
+      this.rounds.forEach(round => {
+        const attendees = this.attemptedStudents(round);
+        if (attendees.length === 0) return;
+        this.examItemsForRound(round).forEach(item => {
+          const results = attendees.map(s => this.gradeAnswer(item, this.findAnswer(s.id, round, item.number)));
+          if (results.length === 0) return;
+          const earned = results.reduce((sum, r) => sum + r.score, 0);
+          const max = results.length * Number(item.score);
+          const key = item.category || '(미분류)';
+          if (!map.has(key)) map.set(key, { category: key, earned: 0, max: 0, n: 0 });
+          const bucket = map.get(key);
+          bucket.earned += earned;
+          bucket.max += max;
+          bucket.n += results.length;
+        });
+      });
+      return [...map.values()].map(c => ({
+        category: c.category,
+        n: c.n,
+        rate: c.max > 0 ? Math.round((c.earned / c.max) * 100) : 0,
+      }));
+    },
+    categoryWeaknessTop10() {
+      return [...this.categoryWeaknessStats].sort((a, b) => a.rate - b.rate).slice(0, 10);
+    },
+    // 응시생이 있는 회차의 문항 전체를 정답률 오름차순으로 모은 목록. (분모/빈칸 처리는 itemCorrectRate와 동일)
+    itemWeaknessStats() {
+      const list = [];
+      this.rounds.forEach(round => {
+        const attendees = this.attemptedStudents(round);
+        if (attendees.length === 0) return;
+        this.examItemsForRound(round).forEach(item => {
+          const results = attendees.map(s => this.gradeAnswer(item, this.findAnswer(s.id, round, item.number)));
+          if (results.length === 0) return;
+          list.push({
+            round,
+            number: item.number,
+            category: item.category || '(미분류)',
+            type: item.type,
+            rate: this.itemCorrectRate(round, item.number),
+            n: results.length,
+            choiceDist: item.type === '객' ? this.choiceDistribution(item, round, attendees) : null,
+          });
+        });
+      });
+      return list;
+    },
+    itemWeaknessTop10() {
+      return [...this.itemWeaknessStats].sort((a, b) => a.rate - b.rate).slice(0, 10);
+    },
+  },
+
+  methods: {
+    // ---------- 공통 유틸 ----------
+    touch() {
+      // db를 변경하는 모든 지점(메서드, 인풋 핸들러)에서 호출한다. 이 값의 변경만 watch하므로
+      // deep watch처럼 전체 db를 순회하지 않는다.
+      this.dirty++;
+    },
+    focusNextRow(event) {
+      const cell = event.target.closest('td');
+      const row = cell ? cell.closest('tr') : null;
+      if (!cell || !row) { event.target.blur(); return; }
+      const colIndex = cell.cellIndex;
+      let nextRow = row.nextElementSibling;
+      while (nextRow) {
+        const nextCell = nextRow.children[colIndex];
+        const nextField = nextCell ? nextCell.querySelector('input, select, textarea') : null;
+        if (nextField) {
+          nextField.focus();
+          if (nextField.tagName !== 'SELECT' && typeof nextField.select === 'function') nextField.select();
+          return;
+        }
+        nextRow = nextRow.nextElementSibling;
+      }
+      event.target.blur();
+    },
+    fmt(n) {
+      const num = Number(n) || 0;
+      return Number.isInteger(num) ? String(num) : num.toFixed(1);
+    },
+    nextId(arr) {
+      return arr.length ? Math.max(...arr.map(x => x.id)) + 1 : 1;
+    },
+    studentNameById(studentId) {
+      const s = this.db.students.find(s => s.id === studentId);
+      return s ? s.name : '';
+    },
+    // 새로고침/데이터 로드 시 표시할 반을 고른다.
+    // 1순위: 마지막으로 보던 반(localStorage) — 단, 그 사이 종료 처리됐다면 후보에서 제외.
+    // 2순위: 종료되지 않은 반 중 생성 순서가 가장 빠른 반(= classes 배열의 첫 항목).
+    pickInitialClassId(classes) {
+      const activeList = classes.filter(c => !c.archived);
+      let lastId = null;
+      try {
+        const stored = localStorage.getItem('lastClassId');
+        lastId = stored !== null ? Number(stored) : null;
+      } catch (e) {}
+      if (lastId !== null && activeList.some(c => c.id === lastId)) return lastId;
+      return activeList.length ? activeList[0].id : null;
+    },
+    applyLatestRoundDefaults() {
+      // rounds는 오름차순 정렬이므로 마지막 값이 해당 반의 가장 최근 회차다.
+      const latestRound = this.rounds.length ? this.rounds[this.rounds.length - 1] : null;
+      this.examRound = latestRound;
+      this.inputRound = latestRound;
+      this.statsRound = latestRound;
+      this.notesRound = latestRound;
+      this.reportRound = latestRound;
+      const firstStudent = this.classStudents.length ? this.classStudents[0].id : null;
+      this.inputStudentId = firstStudent;
+      this.reportStudentId = firstStudent;
+    },
+
+    // ---------- 인증 (Firebase Authentication) ----------
+    async handleAuthChange(u) {
+      this.user = u;
+      this.authChecking = false;
+      if (u) {
+        await this.loadFromFirestore();
+      } else {
+        this.dataLoaded = false;
+        this.resetLocalDb();
+      }
+    },
+    async login() {
+      this.loginError = '';
+      const email = this.loginEmail.trim();
+      const password = this.loginPassword;
+      if (!email || !password) {
+        this.loginError = '이메일과 비밀번호를 입력해주세요.';
+        return;
+      }
+      this.loggingIn = true;
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        this.loginPassword = '';
+      } catch (err) {
+        console.error(err);
+        const code = err && err.code;
+        if (code === 'auth/invalid-email') {
+          this.loginError = '이메일 형식이 올바르지 않습니다.';
+        } else if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+          this.loginError = '이메일 또는 비밀번호가 올바르지 않습니다.';
+        } else if (code === 'auth/too-many-requests') {
+          this.loginError = '로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.';
+        } else {
+          this.loginError = '로그인에 실패했습니다. 다시 시도해주세요.';
+        }
+      } finally {
+        this.loggingIn = false;
+      }
+    },
+    async logout() {
+      if (!confirm('로그아웃 하시겠습니까?')) return;
+      try {
+        await signOut(auth);
+        this.showToast('로그아웃되었습니다.', 'success');
+      } catch (err) {
+        console.error(err);
+        this.showToast('로그아웃에 실패했습니다.', 'error');
+      }
+    },
+    resetLocalDb() {
+      this.db = { classes: [], students: [], examInfo: [], answers: [], notes: [], roundSchedules: [] };
+      this.currentClassId = null;
+    },
+
+    // ---------- Firestore 연동 (클라우드 저장/불러오기) ----------
+    async loadFromFirestore() {
+      this.dataLoading = true;
+      try {
+        const snap = await getDoc(GRADEBOOK_DOC);
+        if (snap.exists()) {
+          const parsed = snap.data();
+          if (parsed && parsed.students && parsed.examInfo && parsed.answers && parsed.notes) {
+            if (!parsed.classes || parsed.classes.length === 0) {
+              // 반 개념이 없던 이전 버전 데이터 마이그레이션
+              const legacyClassId = 1;
+              parsed.classes = [{ id: legacyClassId, name: '기존 반' }];
+              parsed.students.forEach(s => { if (s.classId === undefined) s.classId = legacyClassId; });
+              parsed.examInfo.forEach(e => { if (e.classId === undefined) e.classId = legacyClassId; });
+            }
+            if (!parsed.roundSchedules) parsed.roundSchedules = [];
+            this.db = parsed;
+            this.currentClassId = this.pickInitialClassId(parsed.classes);
+          }
+        } else {
+          // 클라우드에 문서가 아직 없다면(최초 실행) 현재 데모 데이터를 그대로 최초 저장한다.
+          this.currentClassId = this.pickInitialClassId(this.db.classes);
+          await setDoc(GRADEBOOK_DOC, JSON.parse(JSON.stringify(this.db)));
+        }
+        // 새로고침/반 전환 시 항상 그 반의 가장 최근(마지막) 회차가 기본으로 보이도록 한다.
+        this.applyLatestRoundDefaults();
+      } catch (err) {
+        console.error(err);
+        this.showToast('클라우드에서 데이터를 불러오지 못했습니다.', 'error');
+      } finally {
+        this.dataLoading = false;
+        this.dataLoaded = true;
+      }
+    },
+    async persistToFirestore() {
+      if (!this.user) return;
+      this.dataSaving = true;
+      try {
+        const payload = JSON.parse(JSON.stringify(this.db));
+        await setDoc(GRADEBOOK_DOC, payload);
+        await this.flushAuditLog();
+      } catch (err) {
+        console.error(err);
+        this.showToast('클라우드 저장에 실패했습니다.', 'error');
+      } finally {
+        this.dataSaving = false;
+      }
+    },
+
+    // ---------- 수정 이력 (Audit Log) ----------
+    // 실제 저장(this.persistToFirestore)이 일어날 때만 호출된다. 값이 바뀐 필드만
+    // 모아뒀다가(pendingAuditChanges) 여기서 실제로 바뀐 것만 걸러, 같은 학생·회차 단위로
+    // 묶어 로그 문서 1건으로 Firestore에 기록한다.
+    trackFieldChange(key, { studentId, studentName, round, targetField, oldValue, newValue }) {
+      const existing = this.pendingAuditChanges[key];
+      if (existing) {
+        existing.newValue = newValue;
+      } else {
+        this.pendingAuditChanges[key] = { studentId, studentName, round, targetField, oldValue, newValue };
+      }
+    },
+    auditValuesEqual(a, b) {
+      const norm = v => (v === undefined || v === null ? '' : String(v));
+      return norm(a) === norm(b);
+    },
+    async flushAuditLog() {
+      const changes = Object.values(this.pendingAuditChanges);
+      this.pendingAuditChanges = {};
+      if (!changes.length || !this.user) return;
+      const changed = changes.filter(c => !this.auditValuesEqual(c.oldValue, c.newValue));
+      if (!changed.length) return;
+      const groups = {};
+      changed.forEach(c => {
+        const groupKey = `${c.studentId}-${c.round}`;
+        if (!groups[groupKey]) groups[groupKey] = { studentName: c.studentName, round: c.round, changes: [] };
+        groups[groupKey].changes.push({
+          targetField: c.targetField,
+          oldValue: c.oldValue === undefined ? null : c.oldValue,
+          newValue: c.newValue === undefined ? null : c.newValue,
+        });
+      });
+      try {
+        await Promise.all(Object.values(groups).map(g => addDoc(collection(firestoreDb, 'audit_logs'), {
+          timestamp: serverTimestamp(),
+          modifier: this.user.email,
+          studentName: g.studentName,
+          round: g.round,
+          changes: g.changes,
+        })));
+      } catch (err) {
+        console.error('수정 이력 저장 실패', err);
+      }
+    },
+    async openAuditLog() {
+      this.auditModalOpen = true;
+      this.auditLoading = true;
+      try {
+        const q = query(collection(firestoreDb, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50));
+        const snap = await getDocs(q);
+        this.auditLogs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      } catch (err) {
+        console.error(err);
+        this.showToast('수정 이력을 불러오지 못했습니다.', 'error');
+      } finally {
+        this.auditLoading = false;
+      }
+    },
+    closeAuditLog() {
+      this.auditModalOpen = false;
+    },
+    formatAuditTime(ts) {
+      if (!ts || typeof ts.toDate !== 'function') return '-';
+      return ts.toDate().toLocaleString('ko-KR');
+    },
+    displayAuditValue(v) {
+      return (v === null || v === undefined || v === '') ? '(빈값)' : v;
+    },
+
+    // ---------- 백업 / 복원 ----------
+    exportData() {
+      const dataStr = JSON.stringify(this.db, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `성적관리_백업_${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    triggerImport() {
+      this.$refs.fileInput.click();
+    },
+    importData(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const parsed = JSON.parse(e.target.result);
+          if (!parsed || !parsed.classes || !parsed.students || !parsed.examInfo || !parsed.answers || !parsed.notes) {
+            alert('올바른 백업 파일 형식이 아닙니다.');
+            return;
+          }
+          if (!confirm('현재 데이터를 백업 파일 내용으로 덮어씁니다. 계속하시겠습니까?')) return;
+          if (!parsed.roundSchedules) parsed.roundSchedules = [];
+          this.db = parsed;
+          this.currentClassId = this.pickInitialClassId(parsed.classes);
+          this.applyLatestRoundDefaults();
+          this.touch();
+        } catch (err) {
+          alert('파일을 읽는 중 오류가 발생했습니다. JSON 형식을 확인해주세요.');
+        } finally {
+          event.target.value = '';
+        }
+      };
+      reader.readAsText(file, 'UTF-8');
+    },
+
+    toggleMatrixSort(key) {
+      if (this.matrixSort.key === key) {
+        this.matrixSort.dir = this.matrixSort.dir === 'desc' ? 'asc' : 'desc';
+      } else {
+        this.matrixSort.key = key;
+        this.matrixSort.dir = key === 'name' ? 'asc' : 'desc';
+      }
+    },
+    goAdjacentStudent(offset) {
+      const list = this.reportStudents;
+      const idx = list.findIndex(s => s.id === this.reportStudentId);
+      const nextIdx = idx + offset;
+      if (idx === -1 || nextIdx < 0 || nextIdx >= list.length) {
+        alert(offset < 0 ? '이전 학생이 없습니다.' : '다음 학생이 없습니다.');
+        return;
+      }
+      this.reportStudentId = list[nextIdx].id;
+    },
+
+    examItemsForRound(round) {
+      return this.examInfoByRound.get(round) || [];
+    },
+    studentsInClass(classId) {
+      return this.db.students.filter(s => s.classId === classId);
+    },
+    roundsInClass(classId) {
+      const set = new Set(this.db.examInfo.filter(e => e.classId === classId).map(e => e.round));
+      return [...set];
+    },
+    findAnswer(studentId, round, number) {
+      return this.answersIndex.get(`${studentId}_${round}_${number}`);
+    },
+    hasAttemptedItem(item, entry) {
+      if (!entry) return false;
+      if (item.type === '객') return !!entry.input;
+      return entry.manualScore !== null && entry.manualScore !== undefined && entry.manualScore !== '';
+    },
+    hasAttempted(studentId, round) {
+      return this.examItemsForRound(round).some(item =>
+        this.hasAttemptedItem(item, this.findAnswer(studentId, round, item.number))
+      );
+    },
+    // 배지 표시 전용 헬퍼. 채점 자체(gradeAnswer, 점수 0점 처리)는 그대로 두되, 이 학생이
+    // 그 회차를 아직 하나도 입력하지 않았다면 전 문항을 중립("-")으로 보여준다.
+    // 하나라도 입력을 시작한 뒤에는 남은 빈 문항이 오답(X)으로 표시된다.
+    displayResult(item, entry, studentId, round) {
+      if (!this.hasAttempted(studentId, round)) return '';
+      return this.gradeAnswer(item, entry).result;
+    },
+    answerFor(studentId, round, number) {
+      return this.findAnswer(studentId, round, number) || { input: '', manualScore: null };
+    },
+    ensureAnswer(studentId, round, number) {
+      let entry = this.findAnswer(studentId, round, number);
+      if (!entry) {
+        entry = { id: this.nextId(this.db.answers), studentId, round, number, input: '', manualScore: null };
+        this.db.answers.push(entry);
+      }
+      return entry;
+    },
+    setInput(item, value) {
+      const entry = this.ensureAnswer(this.inputStudentId, this.inputRound, item.number);
+      const studentName = this.studentNameById(this.inputStudentId);
+      this.trackFieldChange(`answer-input-${this.inputStudentId}-${this.inputRound}-${item.number}`, {
+        studentId: this.inputStudentId, studentName, round: this.inputRound, targetField: `${item.number}번 문항 답안`,
+        oldValue: entry.input, newValue: value,
+      });
+      entry.input = value;
+      if (item.type === '주') {
+        const num = Number(value);
+        if (value.trim() !== '' && !Number.isNaN(num)) {
+          this.trackFieldChange(`answer-score-${this.inputStudentId}-${this.inputRound}-${item.number}`, {
+            studentId: this.inputStudentId, studentName, round: this.inputRound, targetField: `${item.number}번 문항 점수`,
+            oldValue: entry.manualScore, newValue: num,
+          });
+          entry.manualScore = num;
+        }
+      }
+      this.touch();
+    },
+    setManualScore(item, value) {
+      const entry = this.ensureAnswer(this.inputStudentId, this.inputRound, item.number);
+      const newValue = value === '' ? null : Number(value);
+      this.trackFieldChange(`answer-score-${this.inputStudentId}-${this.inputRound}-${item.number}`, {
+        studentId: this.inputStudentId, studentName: this.studentNameById(this.inputStudentId), round: this.inputRound, targetField: `${item.number}번 문항 점수`,
+        oldValue: entry.manualScore, newValue,
+      });
+      entry.manualScore = newValue;
+      this.touch();
+    },
+    noteFor(studentId, round) {
+      return this.db.notes.find(n => n.studentId === studentId && n.round === round)
+        || { comment: '', taskScore: null, clinicStatus: 'none', nextClinic: false, taskClinicText: '' };
+    },
+    ensureNote(studentId, round) {
+      let entry = this.db.notes.find(n => n.studentId === studentId && n.round === round);
+      if (!entry) {
+        entry = {
+          id: this.nextId(this.db.notes), studentId, round, comment: '',
+          taskScore: null, clinicStatus: 'none', nextClinic: false, taskClinicText: '',
+          genLines: { task: '', clinic: '', next: '' },
+        };
+        this.db.notes.push(entry);
+      }
+      if (!entry.genLines) entry.genLines = { task: '', clinic: '', next: '' };
+      return entry;
+    },
+    setNote(studentId, round, value) {
+      const entry = this.ensureNote(studentId, round);
+      const oldValue = entry.comment;
+      this.trackFieldChange(`note-${studentId}-${round}`, {
+        studentId, studentName: this.studentNameById(studentId), round, targetField: '전달사항',
+        oldValue, newValue: value,
+      });
+      entry.comment = value;
+      this.touch();
+    },
+    // ---------- 과제/클리닉 입력 ----------
+    // 예전 버전에서는 회차 공통 클리닉 날짜(db.roundSchedules)를 문구 앞에 붙였지만, 날짜 없이
+    // 고정 문구만 쓰도록 바뀌었다. 기존 데이터 호환을 위해 db.roundSchedules 자체는 그대로 둔다.
+    // 이미 저장된(날짜가 들어간) 문구는 해당 학생의 선택을 다시 바꾸기 전까지 그대로 유지된다.
+    buildClinicLine(status) {
+      if (status === 'attend') return '지난주 클리닉에 참석하였습니다.';
+      if (status === 'absent') return '지난주 클리닉에 불참하였습니다.';
+      return '';
+    },
+    buildNextClinicLine() {
+      return '다음 클리닉에 보내주세요.';
+    },
+    // 과제/클리닉 텍스트 안에서 slot('task'/'clinic'/'next')이 마지막으로 생성했던 줄을 찾아
+    // 새 줄로 교체한다(없으면 순서에 맞게 삽입, 새 값이 비면 줄을 제거). 사용자가 직접 수정한
+    // 다른 줄/내용은 건드리지 않는다.
+    regenerateSlot(studentId, round, slot, newLine) {
+      const note = this.ensureNote(studentId, round);
+      const lines = note.taskClinicText ? note.taskClinicText.split('\n') : [];
+      const oldLine = note.genLines[slot] || '';
+      const idx = oldLine ? lines.indexOf(oldLine) : -1;
+      if (idx !== -1) {
+        if (newLine) lines[idx] = newLine;
+        else lines.splice(idx, 1);
+      } else if (newLine) {
+        const order = ['task', 'clinic', 'next'];
+        const myOrder = order.indexOf(slot);
+        let insertAt = lines.length;
+        for (let i = 0; i < lines.length; i++) {
+          const laterSlot = order.find(s => s !== slot && order.indexOf(s) > myOrder && note.genLines[s] && note.genLines[s] === lines[i]);
+          if (laterSlot) { insertAt = i; break; }
+        }
+        lines.splice(insertAt, 0, newLine);
+      }
+      note.genLines[slot] = newLine;
+      note.taskClinicText = lines.join('\n');
+      this.touch();
+    },
+    setTaskScore(studentId, round, value) {
+      const note = this.ensureNote(studentId, round);
+      const oldValue = note.taskScore;
+      const newValue = value === '' || value === null ? null : Number(value);
+      this.trackFieldChange(`note-taskscore-${studentId}-${round}`, {
+        studentId, studentName: this.studentNameById(studentId), round, targetField: '과제수행도',
+        oldValue, newValue,
+      });
+      note.taskScore = newValue;
+      const line = (newValue === null || Number.isNaN(newValue)) ? '' : `과제수행도 : ${newValue * 10}%`;
+      this.regenerateSlot(studentId, round, 'task', line);
+      this.touch();
+    },
+    setClinicStatus(studentId, round, value) {
+      const note = this.ensureNote(studentId, round);
+      const oldValue = note.clinicStatus;
+      this.trackFieldChange(`note-clinicstatus-${studentId}-${round}`, {
+        studentId, studentName: this.studentNameById(studentId), round, targetField: '클리닉 참석여부',
+        oldValue, newValue: value,
+      });
+      note.clinicStatus = value;
+      this.regenerateSlot(studentId, round, 'clinic', this.buildClinicLine(value));
+      this.touch();
+    },
+    setNextClinic(studentId, round, checked) {
+      const note = this.ensureNote(studentId, round);
+      const oldValue = note.nextClinic;
+      this.trackFieldChange(`note-nextclinic-${studentId}-${round}`, {
+        studentId, studentName: this.studentNameById(studentId), round, targetField: '차주 클리닉 해당여부',
+        oldValue, newValue: checked,
+      });
+      note.nextClinic = checked;
+      this.regenerateSlot(studentId, round, 'next', checked ? this.buildNextClinicLine() : '');
+      this.touch();
+    },
+    setTaskClinicText(studentId, round, value) {
+      const note = this.ensureNote(studentId, round);
+      const oldValue = note.taskClinicText;
+      this.trackFieldChange(`note-taskclinictext-${studentId}-${round}`, {
+        studentId, studentName: this.studentNameById(studentId), round, targetField: '과제/클리닉 메모',
+        oldValue, newValue: value,
+      });
+      note.taskClinicText = value;
+      this.touch();
+    },
+    combinedNote(studentId, round) {
+      const note = this.noteFor(studentId, round);
+      return [note.taskClinicText, note.comment].filter(t => t && t.trim()).join('\n\n');
+    },
+
+    // ---------- 채점 로직 ----------
+    // 객관식은 답안이 비어있으면 오답(X, 0점). 주관식은 "점수"를 우선시해서 채점한다 —
+    // 기입(학생 답안 텍스트) 여부와 무관하게 점수가 0점이면 X, 배점과 같으면 O, 그 사이면 부분점수(△).
+    // 점수가 아예 입력되지 않았다면(기입 여부와 무관) 오답(X, 0점)으로 처리한다.
+    gradeAnswer(item, entry) {
+      if (item.type === '객') {
+        if (!entry || !entry.input) return { result: 'X', score: 0 };
+        const result = entry.input.trim() === String(item.answer).trim() ? 'O' : 'X';
+        return { result, score: result === 'O' ? Number(item.score) : 0 };
+      } else {
+        if (!entry || entry.manualScore === null || entry.manualScore === undefined || entry.manualScore === '') {
+          return { result: 'X', score: 0 };
+        }
+        const score = Number(entry.manualScore);
+        let result;
+        if (score >= Number(item.score)) result = 'O';
+        else if (score <= 0) result = 'X';
+        else result = '△';
+        return { result, score };
+      }
+    },
+    gradeBadgeClass(result) {
+      return {
+        'bg-emerald-100 text-emerald-700': result === 'O',
+        'bg-red-100 text-red-600': result === 'X',
+        'bg-amber-100 text-amber-700': result === '△',
+        'bg-slate-100 text-slate-400': !result,
+      };
+    },
+
+    // ---------- 통계 ----------
+    studentTotal(studentId, round) {
+      return this.examItemsForRound(round).reduce((sum, item) => {
+        const entry = this.findAnswer(studentId, round, item.number);
+        return sum + this.gradeAnswer(item, entry).score;
+      }, 0);
+    },
+    roundMaxScore(round) {
+      return this.examItemsForRound(round).reduce((sum, item) => sum + Number(item.score), 0);
+    },
+    studentAverage(studentId) {
+      const takenRounds = this.rounds.filter(r => this.hasAttempted(studentId, r));
+      if (takenRounds.length === 0) return 0;
+      const total = takenRounds.reduce((sum, r) => sum + this.studentTotal(studentId, r), 0);
+      return total / takenRounds.length;
+    },
+    attemptedStudents(round) {
+      // rounds에 속한 회차는 캐시(attemptedStudentsByRound)를 쓰고, 그 외(이론상 없어야 하지만)는 직접 계산한다.
+      return this.attemptedStudentsByRound.get(round) || this.classStudents.filter(s => this.hasAttempted(s.id, round));
+    },
+    classAverage(round) {
+      const attempted = this.attemptedStudents(round);
+      if (attempted.length === 0) return 0;
+      const total = attempted.reduce((sum, s) => sum + this.studentTotal(s.id, round), 0);
+      return total / attempted.length;
+    },
+    // 매트릭스 표의 셀 하나(학생 x 회차)의 총점/석차. matrixData에서 한 번에 계산해둔 값을 꺼내 쓴다.
+    matrixCell(studentId, round) {
+      const cellMap = this.matrixData.get(round);
+      const cell = cellMap && cellMap.get(studentId);
+      return cell || { total: this.studentTotal(studentId, round), rank: 0 };
+    },
+    studentRank(studentId, round) {
+      const totals = this.attemptedStudents(round)
+        .map(s => ({ id: s.id, total: this.studentTotal(s.id, round) }))
+        .sort((a, b) => b.total - a.total);
+      const myTotal = this.studentTotal(studentId, round);
+      return totals.findIndex(t => t.total === myTotal) + 1;
+    },
+    itemCorrectRate(round, number) {
+      const item = this.db.examInfo.find(e => e.classId === this.currentClassId && e.round === round && e.number === number);
+      if (!item) return 0;
+      // 분모는 이 회차에 응시한 학생 전체(결석은 제외). 문항을 빈칸으로 남긴 경우나 주관식 미채점은
+      // gradeAnswer가 오답(0점)으로 계산해준다.
+      const results = this.attemptedStudents(round)
+        .map(s => this.gradeAnswer(item, this.findAnswer(s.id, round, number)));
+      if (results.length === 0) return 0;
+      if (item.type === '주') {
+        // 주관식은 부분점수가 있어 정오 판정 대신 득점 총합 / 배점 총합으로 정답률을 계산한다.
+        const earnedTotal = results.reduce((sum, r) => sum + r.score, 0);
+        const maxTotal = results.length * Number(item.score);
+        return maxTotal > 0 ? Math.round((earnedTotal / maxTotal) * 100) : 0;
+      }
+      const correctCount = results.filter(r => r.result === 'O').length;
+      return Math.round((correctCount / results.length) * 100);
+    },
+    // 객관식 문항에서 학생들이 실제 고른 선택지 분포 (오개념 파악용). 빈칸은 '무응답'으로 집계한다.
+    choiceDistribution(item, round, attendees) {
+      const counts = new Map();
+      attendees.forEach(s => {
+        const entry = this.findAnswer(s.id, round, item.number);
+        const val = (entry && entry.input ? entry.input.trim() : '') || '무응답';
+        counts.set(val, (counts.get(val) || 0) + 1);
+      });
+      const total = attendees.length;
+      const answer = String(item.answer).trim();
+      // 정답은 항상 초록, 오답 선택지는 등장 순서(오름차순)대로 고정된 색을 순환 없이 배정한다.
+      // 무응답은 실제로 고른 선택지가 아니므로 별도의 중립색으로 구분한다.
+      const wrongPalette = ['#2a78d6', '#eda100', '#4a3aa7', '#e34948'];
+      let wrongIdx = 0;
+      return [...counts.keys()]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+        .map(choice => {
+          const count = counts.get(choice);
+          const correct = choice === answer;
+          let color;
+          if (correct) color = '#10b981';
+          else if (choice === '무응답') color = '#94a3b8';
+          else { color = wrongPalette[Math.min(wrongIdx, wrongPalette.length - 1)]; wrongIdx++; }
+          return { choice, count, percent: Math.round((count / total) * 100), correct, color };
+        });
+    },
+    choiceDistTitle(row) {
+      if (!row.choiceDist) return '';
+      return row.choiceDist.map(d => `${d.choice === '무응답' ? '무응답' : d.choice + '번'} ${d.percent}%(${d.count}명)${d.correct ? ' 정답' : ''}`).join(' · ');
+    },
+
+    // ---------- CRUD : 반 ----------
+    addClass() {
+      const name = this.newClassName.trim();
+      if (!name) return;
+      const id = this.nextId(this.db.classes);
+      this.db.classes.push({ id, name });
+      this.newClassName = '';
+      this.currentClassId = id;
+      this.touch();
+    },
+    deleteClass(cls) {
+      if (this.db.classes.length <= 1) {
+        alert('최소 1개의 반은 유지되어야 합니다.');
+        return;
+      }
+      if (!confirm(`'${cls.name}' 반을 삭제하시겠습니까? 소속 학생, 시험 정보, 답안, 전달사항이 모두 삭제됩니다.`)) return;
+      const studentIds = this.studentsInClass(cls.id).map(s => s.id);
+      this.db.classes = this.db.classes.filter(c => c.id !== cls.id);
+      this.db.students = this.db.students.filter(s => s.classId !== cls.id);
+      this.db.examInfo = this.db.examInfo.filter(e => e.classId !== cls.id);
+      this.db.answers = this.db.answers.filter(a => !studentIds.includes(a.studentId));
+      this.db.notes = this.db.notes.filter(n => !studentIds.includes(n.studentId));
+      if (this.currentClassId === cls.id) {
+        const nextActive = this.db.classes.find(c => !c.archived);
+        this.currentClassId = nextActive ? nextActive.id : this.db.classes[0].id;
+      }
+      this.touch();
+    },
+    archiveClass(cls) {
+      if (this.activeClasses.length <= 1) {
+        alert('최소 1개의 활성 반은 유지되어야 합니다.');
+        return;
+      }
+      if (!confirm(`'${cls.name}' 반을 종료 처리하시겠습니까?\n헤더의 반 목록에서 더 이상 보이지 않으며, [반 정보 관리] 탭에서만 조회할 수 있습니다.`)) return;
+      const wasCurrent = this.currentClassId === cls.id;
+      cls.archived = true;
+      if (wasCurrent) {
+        this.currentClassId = this.activeClasses.length ? this.activeClasses[0].id : cls.id;
+      }
+      this.touch();
+    },
+    restoreClass(cls) {
+      cls.archived = false;
+      this.touch();
+    },
+
+    // ---------- CRUD : 시험 정보 ----------
+    addRound() {
+      if (!this.newRoundInput || this.rounds.includes(this.newRoundInput)) return;
+      const count = Math.max(1, this.newRoundItemCount || 1);
+      for (let i = 1; i <= count; i++) {
+        this.db.examInfo.push({
+          id: this.nextId(this.db.examInfo),
+          round: this.newRoundInput,
+          number: i,
+          score: 3,
+          answer: '',
+          type: '객',
+          category: '',
+          classId: this.currentClassId,
+        });
+      }
+      this.examRound = this.newRoundInput;
+      this.touch();
+    },
+    deleteRound() {
+      const round = this.examRound;
+      if (!round) return;
+      if (!confirm(`${round}회차를 삭제하시겠습니까? 이 회차의 모든 문항, 학생 답안, 전달사항이 함께 삭제됩니다.`)) return;
+      const classStudentIds = this.studentsInClass(this.currentClassId).map(s => s.id);
+      this.db.examInfo = this.db.examInfo.filter(e => !(e.round === round && e.classId === this.currentClassId));
+      this.db.answers = this.db.answers.filter(a => !(a.round === round && classStudentIds.includes(a.studentId)));
+      this.db.notes = this.db.notes.filter(n => !(n.round === round && classStudentIds.includes(n.studentId)));
+      const remaining = this.rounds;
+      this.examRound = remaining.length ? remaining[remaining.length - 1] : null;
+      this.touch();
+    },
+    addExamItem() {
+      const items = this.currentExamItems;
+      const nextNumber = items.length ? Math.max(...items.map(i => i.number)) + 1 : 1;
+      this.db.examInfo.push({
+        id: this.nextId(this.db.examInfo),
+        round: this.examRound,
+        number: nextNumber,
+        score: 3,
+        answer: '',
+        type: '객',
+        category: '',
+        classId: this.currentClassId,
+      });
+      this.touch();
+    },
+    onTypeChange(item) {
+      if (item.type === '주') {
+        item.answer = '.';
+      }
+      this.touch();
+    },
+    deleteExamItem(item) {
+      if (!confirm(`${item.number}번 문항을 삭제하시겠습니까? 관련 학생 답안도 함께 삭제됩니다.`)) return;
+      const classStudentIds = this.studentsInClass(item.classId).map(s => s.id);
+      this.db.examInfo = this.db.examInfo.filter(e => e.id !== item.id);
+      this.db.answers = this.db.answers.filter(a =>
+        !(a.round === item.round && a.number === item.number && classStudentIds.includes(a.studentId))
+      );
+      this.touch();
+    },
+
+    // ---------- CRUD : 학생 ----------
+    addStudent() {
+      const name = this.newStudentName.trim();
+      if (!name) return;
+      const id = this.nextId(this.db.students);
+      this.db.students.push({ id, name, classId: this.currentClassId });
+      this.newStudentName = '';
+      this.inputStudentId = id;
+      this.touch();
+    },
+    renameStudent(student) {
+      const name = prompt('학생 이름을 입력하세요.', student.name);
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      student.name = trimmed;
+      this.touch();
+    },
+    toggleWithdraw(student) {
+      student.withdrawn = !student.withdrawn;
+      this.touch();
+    },
+    deleteStudent(student) {
+      if (!confirm(`'${student.name}' 학생을 삭제하시겠습니까? 관련 답안 및 전달사항이 모두 삭제됩니다.`)) return;
+      this.db.students = this.db.students.filter(s => s.id !== student.id);
+      this.db.answers = this.db.answers.filter(a => a.studentId !== student.id);
+      this.db.notes = this.db.notes.filter(n => n.studentId !== student.id);
+      this.touch();
+    },
+
+    // ---------- 성적표 이미지 복사 ----------
+    async copyReportImage() {
+      const target = document.getElementById('print-area');
+      if (!target || this.capturing) return;
+      this.capturing = true;
+
+      // #print-area는 <main class="max-w-7xl mx-auto">의 자식이라, 창을 넓히면 main이
+      // 가운데 정렬되면서 print-area의 실제 화면 좌표(left 오프셋)가 창 크기에 따라
+      // 계속 달라진다. 폭만 고정해서는 이 위치 의존성이 없어지지 않아 넓은 창에서
+      // 캡처가 어긋나는(잘리는) 원인이 됐다. position:fixed로 뷰포트 (0,0)에 고정하면
+      // 창 크기·주변 레이아웃과 완전히 무관하게 항상 같은 위치/크기로 렌더링된다.
+      // z-index:-1로 보통 콘텐츠 뒤에 깔려 화면에는 거의 보이지 않는다.
+      const CAPTURE_WIDTH = 768;
+      const prevStyleCssText = target.style.cssText;
+      target.style.position = 'fixed';
+      target.style.top = '0';
+      target.style.left = '0';
+      target.style.margin = '0';
+      target.style.width = CAPTURE_WIDTH + 'px';
+      target.style.maxWidth = CAPTURE_WIDTH + 'px';
+      target.style.zIndex = '-1';
+
+      try {
+        // 폰트 로딩과, 위에서 바꾼 고정 폭 레이아웃이 완전히 반영된 뒤 캡처해야
+        // 텍스트 오프셋이나 잘림 없이 정확히 캡처된다.
+        if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+
+        // html2canvas는 글자를 <canvas>에 직접 한 글자씩 다시 그리는 방식이라 폰트
+        // ascent/descent 계산이 브라우저 실제 렌더링과 어긋나는 고질적인 버그가 있었다
+        // (표/그래프 텍스트가 전부 아래로 밀림). html-to-image는 대상 DOM을 그대로
+        // SVG <foreignObject> 안에 넣어 "브라우저 자신이" 렌더링하게 하므로, 화면에
+        // 보이는 것과 텍스트 위치가 완전히 동일한 이미지를 얻을 수 있다.
+        // width/height를 명시해 뷰포트 크기와 무관하게 콘텐츠 전체(스크롤 영역 포함)를
+        // 온전히 캡처하도록 강제한다.
+        const blob = await htmlToImage.toBlob(target, {
+          backgroundColor: '#ffffff',
+          pixelRatio: 2,
+          cacheBust: true,
+          width: target.scrollWidth,
+          height: target.scrollHeight,
+        });
+        if (!blob) throw new Error('이미지 생성에 실패했습니다.');
+
+        if (navigator.clipboard && window.ClipboardItem) {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          this.showToast('성적표가 클립보드에 복사되었습니다! 카카오톡 등에 붙여넣기(Ctrl+V) 하세요.', 'success');
+        } else {
+          this.downloadImage(blob);
+          this.showToast('이 브라우저는 클립보드 복사를 지원하지 않아 이미지를 다운로드했습니다.', 'error');
+        }
+      } catch (err) {
+        console.error(err);
+        this.showToast('이미지 복사에 실패했습니다. 다시 시도해주세요.', 'error');
+      } finally {
+        target.style.cssText = prevStyleCssText;
+        this.capturing = false;
+      }
+    },
+    downloadImage(blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const name = this.reportStudent ? this.reportStudent.name : '성적표';
+      a.href = url;
+      a.download = `성적표_${name}_${this.reportRound}회차.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    showToast(message, type) {
+      this.toast.message = message;
+      this.toast.type = type;
+      this.toast.show = true;
+      clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => { this.toast.show = false; }, 3500);
+    },
+  },
+}).mount('#app');
+</script>
+
+</body>
+</html>

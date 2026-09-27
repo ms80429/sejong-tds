@@ -25,7 +25,7 @@
     match /databases/{database}/documents {
       match /{document=**} {
         allow read, write: if request.auth != null
-          && request.auth.token.email in ['여기에_로그인_이메일@gmail.com'];
+          && request.auth.token.email in ['선생님_이메일@gmail.com', '조교_이메일@gmail.com'];
       }
     }
   }
@@ -33,6 +33,11 @@
 - **Authentication → Settings → 사용자 작업**에서 **"생성(가입) 사용 설정"을 해제**하면 외부인이 가입하는 것 자체를 막을 수 있습니다.
 
 > `index.html` 안의 Firebase `apiKey`는 공개돼도 되는 값입니다. 보안은 위의 로그인과 Firestore 규칙이 담당합니다.
+
+## 여러 명이 쓸 때 주의
+
+저장할 때 전체 데이터를 통째로 덮어씁니다. 두 사람이 **동시에** 편집하면 나중에 저장한 쪽이 앞사람의 변경을 지웁니다.
+한 명씩 편집하고, 편집을 시작하기 전에 새로고침하세요. 누가 무엇을 고쳤는지는 수정 이력에 이메일과 함께 남습니다.
 
 ## 백업
 

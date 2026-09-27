@@ -17,17 +17,20 @@
 
 - **Authentication → Settings → 승인된 도메인**에 `<계정명>.github.io`를 추가합니다. 추가하지 않으면 Pages 주소에서 로그인이 되지 않습니다.
 - **Authentication → Users**에서 로그인할 계정을 추가하거나 관리합니다.
-- **Firestore → 규칙**이 로그인한 사용자만 읽고 쓰도록 되어 있는지 확인합니다. 예:
+- **Firestore → 규칙**에서 아래처럼 **허용할 이메일만** 읽고 쓰게 합니다.
+  "로그인만 하면 허용"(`request.auth != null`)으로 두면 안 됩니다. apiKey가 공개돼 있어서 누구나 API로 계정을 만들 수 있기 때문입니다.
   ```
   rules_version = '2';
   service cloud.firestore {
     match /databases/{database}/documents {
       match /{document=**} {
-        allow read, write: if request.auth != null;
+        allow read, write: if request.auth != null
+          && request.auth.token.email in ['여기에_로그인_이메일@gmail.com'];
       }
     }
   }
   ```
+- **Authentication → Settings → 사용자 작업**에서 **"생성(가입) 사용 설정"을 해제**하면 외부인이 가입하는 것 자체를 막을 수 있습니다.
 
 > `index.html` 안의 Firebase `apiKey`는 공개돼도 되는 값입니다. 보안은 위의 로그인과 Firestore 규칙이 담당합니다.
 
